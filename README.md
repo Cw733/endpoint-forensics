@@ -6,7 +6,7 @@ Windows endpoint forensics and security audit toolkit for small-to-medium enviro
 
 | File | Description |
 |------|-------------|
-| `Collect-Evidence.ps1` | Comprehensive endpoint evidence collector with CIS IG1 compliance checks. Gathers system info, logon events, processes, services, scheduled tasks, network state, Defender status/exclusions, browser history, USB history, Prefetch artifacts, WMI persistence, webcam access logs, and full CIS IG1 gap analysis. Outputs public IP for external scanning. Run as Administrator. |
+| `Collect.ps1` | Comprehensive endpoint evidence collector with CIS IG1 compliance checks. Gathers system info, logon events, processes, services, scheduled tasks, network state, Defender status/exclusions, browser history, USB history, Prefetch artifacts, WMI persistence, webcam access logs, and full CIS IG1 gap analysis. Outputs public IP for external scanning. Run as Administrator. |
 | `Analysis-Prompt.txt` | AI analysis prompt for use with GitHub Copilot CLI or any capable AI assistant. Feed this file along with your evidence folder path to generate a standardized security audit report with CIS IG1 compliance table, or a user-specific investigation report. |
 | `CIS-IG1-Manual-Checklist.txt` | CIS Controls IG1 manual assessment checklist for items requiring interviews, document review, or access to non-endpoint systems (identity provider, firewall, backup platform). |
 | `FortiGate-Export-Checklist.txt` | On-site Fortinet FortiGate export checklist. Covers configuration backup, event logs, traffic logs, security logs, firewall policy review, VPN configuration, admin accounts, and log retention. |
@@ -44,22 +44,22 @@ Items that require manual/organizational review are covered in `CIS-IG1-Manual-C
 Set-ExecutionPolicy -Scope Process Bypass
 
 # Collect from all users, output next to script
-.\Collect-Evidence.ps1
+.\Collect.ps1
 
 # Target a specific user
-.\Collect-Evidence.ps1 -TargetUser "jsmith"
+.\Collect.ps1 -TargetUser "jsmith"
 
 # Specify output path (e.g., external drive)
-.\Collect-Evidence.ps1 -OutputRoot "E:\Audits"
+.\Collect.ps1 -OutputRoot "E:\Audits"
 
 # Include network scan of all hosts on the LAN
-.\Collect-Evidence.ps1 -NetworkScan
+.\Collect.ps1 -NetworkScan
 
 # Full options
-.\Collect-Evidence.ps1 -TargetUser "jsmith" -OutputRoot "E:\Audits" -NetworkScan -Subnet "10.0.1" -RemoteCredential (Get-Credential)
+.\Collect.ps1 -TargetUser "jsmith" -OutputRoot "E:\Audits" -NetworkScan -Subnet "10.0.1" -RemoteCredential (Get-Credential)
 
 # Show detailed help
-.\Collect-Evidence.ps1 -Help
+.\Collect.ps1 -Help
 ```
 
 ### Key Output Files
@@ -81,7 +81,7 @@ Review all files with `_FLAGGED`, `_SUSPICIOUS`, or `_UNEXPECTED` suffixes as pr
 
 1. Open a new GitHub Copilot CLI session
 2. Feed it `Analysis-Prompt.txt` as context
-3. Say: `"I have an evidence folder from Collect-Evidence.ps1 at [path]. Generate a security audit report following the instructions in the prompt file."`
+3. Say: `"I have an evidence folder from Collect.ps1 at [path]. Generate a security audit report following the instructions in the prompt file."`
 4. For an investigation report: `"Also generate an investigation findings report for user [username]."`
 5. The AI will generate a report with a full CIS IG1 compliance table aligned to CIS control numbers.
 
@@ -93,7 +93,7 @@ Use `FortiGate-Export-Checklist.txt` when conducting an on-site Fortinet firewal
 
 ### CIS IG1 Assessment
 
-Run `Collect-Evidence.ps1` first -- it covers all technically measurable CIS IG1 safeguards at the endpoint level. Then work through `CIS-IG1-Manual-Checklist.txt` with the site owner or IT contact for items requiring human review (asset management process, MFA, backup verification, security awareness training, incident response plan).
+Run `Collect.ps1` first -- it covers all technically measurable CIS IG1 safeguards at the endpoint level. Then work through `CIS-IG1-Manual-Checklist.txt` with the site owner or IT contact for items requiring human review (asset management process, MFA, backup verification, security awareness training, incident response plan).
 
 ## Legal Notice
 
