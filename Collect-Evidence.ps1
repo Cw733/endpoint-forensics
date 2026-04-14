@@ -1,13 +1,15 @@
-#Requires -RunAsAdministrator
+﻿#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    Corporate endpoint forensic evidence collector.
+    Corporate endpoint forensic evidence collector with CIS IG1 compliance checks.
 
 .DESCRIPTION
     Collects system artifacts, user activity, browser history, network state,
-    and security events for an authorized internal investigation.
+    security events, and CIS IG1 compliance data for authorized internal
+    investigations and security audits. Output is a timestamped folder (and
+    ZIP archive) containing structured evidence files organized by section.
 
-    LEGAL NOTICE: Only run this on systems you are explicitly authorized to 
+    LEGAL NOTICE: Only run this on systems you are explicitly authorized to
     investigate. Obtain written authorization from the asset owner before use.
 
 .PARAMETER TargetUser
@@ -18,11 +20,29 @@
     Defaults to the directory containing this script (ideal for thumb drive use).
     A timestamped subfolder Evidence_<hostname>_<timestamp> is created inside.
 
+.PARAMETER NetworkScan
+    After completing the full local scan, perform a WMI-based triage of all
+    other live hosts on the local subnet.
+
+.PARAMETER Subnet
+    Three-octet subnet prefix to scan (e.g. "192.168.1"). Only used with
+    -NetworkScan. Auto-detected from the local adapter if omitted.
+
+.PARAMETER PingTimeout
+    Ping timeout in milliseconds per host during the sweep. Default: 500.
+
+.PARAMETER RemoteCredential
+    Alternate PSCredential for WMI queries against remote hosts. Only used
+    with -NetworkScan. If omitted, runs as the current user.
+
+.PARAMETER Help
+    Show detailed help text and exit.
+
 .EXAMPLE
     .\Collect-Evidence.ps1
     .\Collect-Evidence.ps1 -TargetUser "jsmith"
     .\Collect-Evidence.ps1 -OutputRoot "E:\"
-    .\Collect-Evidence.ps1 -TargetUser "jsmith" -OutputRoot "D:\Investigation"
+    .\Collect-Evidence.ps1 -NetworkScan -Subnet "10.0.1" -RemoteCredential (Get-Credential)
 #>
 
 param(
@@ -118,16 +138,26 @@ EXAMPLES
 OUTPUT FILES (key files -- full list in _collection_log.txt)
 
   quick_indicators.json         Instant risk flag summary (start here)
-  cis_ig1_gaps.json             CIS IG1 compliance gaps
+  cis_ig1_gaps.json             CIS IG1 compliance gaps (all CIS checks in one file)
+  00_metadata.txt               Collection info + public IP for external scanning
   02_logon_events.csv           30 days of logon/logoff/failure events
   03_processes_FLAGGED.txt      Suspicious processes (if any)
   07_dns_cache.txt              Recent DNS lookups (survives browser clear)
+  07_defender_status.json       Defender real-time, scan history, signature age
+  07_defender_exclusions.json   Defender exclusion paths/procs (attacker abuse)
+  07_firewall_profiles.txt      Per-profile firewall state
+  07_rdp_settings.json          RDP and NLA configuration
   09b_browser_keyword_FLAGGED   Browser history hits on investigation keywords
-  13_firewall_status.txt        Per-profile firewall state
-  13_rdp_status.txt             RDP and NLA configuration
+  13b_prefetch_FLAGGED.csv      Suspicious executables in Prefetch (if any)
+  13c_wmi_persistence.csv       WMI event subscriptions (if any)
   15_cis_dormant_FLAGGED.csv    Dormant enabled accounts (CIS 5.3)
   16_cis_pending_updates_FLAGGED Pending Windows updates (CIS 7.3)
   17_cis_shares_OVERPERMISSIVE  Overpermissive SMB shares (CIS 3.3)
+  17_cis_bitlocker_status.csv   Drive encryption status (CIS 3.6)
+  18_cis_secure_config.json     SMBv1, LLMNR, NetBIOS status (CIS 4.1)
+  18_cis_screen_lock.json       Screen lock / inactivity timeout (CIS 4.3)
+  18_cis_audit_log_sizes.json   Event log size and retention (CIS 8.3)
+  18_cis_ps_logging.json        PowerShell logging policy (CIS 8.5)
   network_scan\network_summary  Per-host triage results (with -NetworkScan)
 
   All files marked _FLAGGED, _SUSPICIOUS, or _UNEXPECTED are priority review.
@@ -175,6 +205,7 @@ $script:indicators = [ordered]@{
     NLARequired               = $null
     FirewallDisabledProfiles  = @()
     DefenderRealtimeEnabled   = $null
+    PublicIP                  = $null
     RemoteAccessSoftwareHits  = @()
     SuspiciousProcessCount    = 0
     BrowserKeywordHitCount    = 0
@@ -207,6 +238,17 @@ $script:cisIG1 = [ordered]@{
     AutorunDisabled          = $null  # CIS 10.3 - autorun disabled for removable media
     OpenShareCount           = 0      # CIS 3.3 - shares with Everyone/Users full/change access
     AllShareNames            = @()    # CIS 12.2 - all configured SMB shares
+    SMBv1Enabled             = $null  # CIS 4.1 - SMBv1 protocol enabled (major risk)
+    LLMNRDisabled            = $null  # CIS 4.1 - LLMNR disabled (poisoning vector)
+    NetBIOSDisabled          = $null  # CIS 4.1 - NetBIOS over TCP disabled
+    ScreenLockTimeout        = $null  # CIS 4.3 - screen lock timeout seconds
+    ScreenLockEnabled        = $null  # CIS 4.3 - screen lock requires password
+    PSScriptBlockLogging     = $null  # CIS 8.5 - PowerShell script block logging
+    PSModuleLogging          = $null  # CIS 8.5 - PowerShell module logging
+    AuditLogMaxSizes         = @{}    # CIS 8.3 - event log max sizes in MB
+    DefenderBehaviorMonitor  = $null  # CIS 10.7 - behavior-based detection enabled
+    DefenderExclusions       = @()    # Defender exclusion paths (attacker abuse)
+    RemovableDriveScan       = $null  # CIS 10.4 - Defender scans removable media
 }
 
 function Log {
@@ -365,6 +407,26 @@ Output Path     : $OutputPath
 "@
 Save "00_metadata.txt" $meta
 Write-Host $meta -ForegroundColor Green
+
+# Collect public IP for external exposure assessment / later port scanning
+try {
+    $publicIP = (Invoke-RestMethod -Uri "https://api.ipify.org?format=json" -TimeoutSec 5).ip
+    $script:indicators.PublicIP = $publicIP
+    Log "  Public IP: $publicIP"
+    Add-Content "$OutputPath\00_metadata.txt" "`nPublic IP       : $publicIP"
+
+    # Also try reverse DNS on the public IP
+    try {
+        $rdns = [System.Net.Dns]::GetHostEntry($publicIP).HostName
+        Add-Content "$OutputPath\00_metadata.txt" "Public rDNS     : $rdns"
+        Log "  Public rDNS: $rdns"
+    } catch {
+        Add-Content "$OutputPath\00_metadata.txt" "Public rDNS     : (no PTR record)"
+    }
+} catch {
+    Log "  Could not determine public IP (no internet or api.ipify.org blocked)" "DarkGray"
+    $script:indicators.PublicIP = "unknown"
+}
 
 # --- System Information -------------------------------------------------------
 
@@ -837,6 +899,50 @@ try {
     if ($defenderStatus.AntivirusSignatureAge -gt 7) {
         Log "  *** Defender signatures are $($defenderStatus.AntivirusSignatureAge) days old -- definitions may be stale ***" "DarkYellow"
     }
+
+    # CIS 10.7 -- Behavior-based anti-malware
+    $script:cisIG1.DefenderBehaviorMonitor = $defenderStatus.BehaviorMonitorEnabled
+    if (-not $defenderStatus.BehaviorMonitorEnabled) {
+        Log "  [CIS 10.7] *** FLAGGED: Defender behavior monitoring is DISABLED ***" "DarkYellow"
+    } else {
+        Log "  [CIS 10.7] Behavior monitoring enabled" "DarkGray"
+    }
+
+    # Defender exclusion list -- attackers commonly add exclusions to hide malware
+    try {
+        $mpPref = Get-MpPreference -ErrorAction Stop
+        $exclPaths = @($mpPref.ExclusionPath)
+        $exclExts  = @($mpPref.ExclusionExtension)
+        $exclProcs = @($mpPref.ExclusionProcess)
+
+        $exclReport = [ordered]@{
+            ExclusionPaths      = $exclPaths
+            ExclusionExtensions = $exclExts
+            ExclusionProcesses  = $exclProcs
+        }
+        $exclReport | ConvertTo-Json -Depth 3 |
+            Set-Content "$OutputPath\07_defender_exclusions.json" -Encoding UTF8
+
+        $totalExcl = @($exclPaths + $exclExts + $exclProcs | Where-Object { $_ }).Count
+        $script:cisIG1.DefenderExclusions = @($exclPaths + $exclExts + $exclProcs | Where-Object { $_ })
+        if ($totalExcl -gt 0) {
+            Log "  *** $totalExcl Defender exclusion(s) configured -- review 07_defender_exclusions.json ***" "DarkYellow"
+            $exclPaths | Where-Object { $_ } | ForEach-Object { Log "    Excluded path: $_" "DarkYellow" }
+            $exclProcs | Where-Object { $_ } | ForEach-Object { Log "    Excluded proc: $_" "DarkYellow" }
+        } else {
+            Log "  No Defender exclusions configured" "DarkGray"
+        }
+
+        # CIS 10.4 -- Removable drive scanning
+        $script:cisIG1.RemovableDriveScan = -not $mpPref.DisableRemovableDriveScanning
+        if ($mpPref.DisableRemovableDriveScanning) {
+            Log "  [CIS 10.4] *** FLAGGED: Defender removable drive scanning is DISABLED ***" "DarkYellow"
+        } else {
+            Log "  [CIS 10.4] Removable drive scanning enabled" "DarkGray"
+        }
+    } catch {
+        Log "  Could not query Defender preferences: $_" "DarkGray"
+    }
 } catch {
     Log "  Could not query Defender (may not be primary AV): $_" "DarkGray"
 }
@@ -1146,8 +1252,6 @@ $browserKeywords = @(
     # Webcam-specific
     "webcam hack","access webcam remotely","remote webcam","spy camera",
     "ip webcam","ispy","blue iris","webcam viewer","spy cam",
-    # Logitech webcam searches (relevant to this investigation)
-    "logitech c920","logitech c922","logitech brio","logi tune","logitune","logitech capture",
     # Virtual camera / streaming to another device
     "obs virtual camera","manycam","youcam","webcamoid","droidcam","epoccam","ivcam",
     # Data exfil upload sites
@@ -1338,6 +1442,97 @@ $regOutput = foreach ($k in $persistenceKeys) {
     }
 }
 Save "13_registry_persistence.txt" ($regOutput -join "")
+
+# --- Prefetch Files -----------------------------------------------------------
+# Prefetch shows every executable that has been launched on the machine.
+# Critical forensic artifact -- shows programs that were run even if later deleted.
+
+Start-Section "PREFETCH FILES" "C:\\Windows\\Prefetch -- shows every executable ever launched on this machine"
+
+$prefetchDir = "$env:SystemRoot\Prefetch"
+if (Test-Path $prefetchDir) {
+    $pfFiles = Get-ChildItem $prefetchDir -Filter "*.pf" -ErrorAction SilentlyContinue |
+        Select-Object Name,
+            @{N="SizeKB";E={[math]::Round($_.Length/1KB,1)}},
+            CreationTime, LastWriteTime, LastAccessTime |
+        Sort-Object LastWriteTime -Descending
+    if ($pfFiles) {
+        $pfFiles | Export-Csv "$OutputPath\13b_prefetch_files.csv" -NoTypeInformation
+        Log "  $($pfFiles.Count) Prefetch files found -- see 13b_prefetch_files.csv"
+
+        # Flag prefetch entries for known suspicious tools
+        $suspPrefetch = $pfFiles | Where-Object {
+            $_.Name -imatch "ANYDESK|TEAMVIEWER|SCREENCONNECT|PSEXEC|MIMIKATZ|RCLONE|NGROK|PLINK|WINSCP|FILEZILLA|PUTTY|NMAP|WIRESHARK|PROCDUMP|METERPRETER|COBALTSTRIKE|LAZAGNE|RUBEUS|CERTUTIL"
+        }
+        if ($suspPrefetch) {
+            $suspPrefetch | Export-Csv "$OutputPath\13b_prefetch_FLAGGED.csv" -NoTypeInformation
+            Log "  *** $($suspPrefetch.Count) suspicious Prefetch entries -- see 13b_prefetch_FLAGGED.csv ***" "DarkYellow"
+            $suspPrefetch | ForEach-Object { Log "    $($_.Name) (last run: $($_.LastWriteTime))" "DarkYellow" }
+        }
+    } else {
+        Log "  No Prefetch files found (Prefetch may be disabled)" "DarkGray"
+    }
+} else {
+    Log "  Prefetch directory not found" "DarkGray"
+}
+
+# --- WMI Event Subscription Persistence ----------------------------------------
+# WMI event subscriptions are a stealthy persistence mechanism. Malware and
+# attackers use __EventFilter + __EventConsumer + __FilterToConsumerBinding
+# to execute code on triggers (e.g., at logon, on a timer) without visible
+# scheduled tasks or registry entries.
+
+Start-Section "WMI PERSISTENCE" "WMI event subscriptions -- stealthy persistence mechanism used by advanced threats"
+
+$wmiReport = @()
+try {
+    $filters = Get-WmiObject -Namespace "root\subscription" -Class __EventFilter -ErrorAction Stop
+    $consumers = Get-WmiObject -Namespace "root\subscription" -Class __EventConsumer -ErrorAction Stop
+    $bindings = Get-WmiObject -Namespace "root\subscription" -Class __FilterToConsumerBinding -ErrorAction Stop
+
+    foreach ($f in $filters) {
+        $wmiReport += [PSCustomObject]@{
+            Type  = "EventFilter"
+            Name  = $f.Name
+            Query = $f.Query
+            Lang  = $f.QueryLanguage
+        }
+    }
+    foreach ($c in $consumers) {
+        $wmiReport += [PSCustomObject]@{
+            Type  = "EventConsumer"
+            Name  = $c.Name
+            Query = if ($c.CommandLineTemplate) { $c.CommandLineTemplate }
+                    elseif ($c.ScriptText) { $c.ScriptText.Substring(0, [Math]::Min($c.ScriptText.Length, 500)) }
+                    else { $c.__CLASS }
+            Lang  = $c.__CLASS
+        }
+    }
+    foreach ($b in $bindings) {
+        $wmiReport += [PSCustomObject]@{
+            Type  = "FilterToConsumerBinding"
+            Name  = "$($b.Filter) -> $($b.Consumer)"
+            Query = ""
+            Lang  = ""
+        }
+    }
+
+    if ($wmiReport.Count -gt 0) {
+        $wmiReport | Export-Csv "$OutputPath\13c_wmi_persistence.csv" -NoTypeInformation
+        Log "  *** $($wmiReport.Count) WMI event subscription object(s) found -- review 13c_wmi_persistence.csv ***" "DarkYellow"
+        $wmiReport | Where-Object { $_.Type -eq "EventConsumer" } | ForEach-Object {
+            Log "    Consumer: $($_.Name) -- $($_.Query)" "DarkYellow"
+        }
+    } else {
+        Log "  No WMI event subscriptions found (clean)" "DarkGray"
+    }
+} catch {
+    Log "  Could not query WMI subscriptions: $_" "DarkGray"
+}
+
+# --- PowerShell Execution Policy ----------------------------------------------
+$execPolicy = Get-ExecutionPolicy -List -ErrorAction SilentlyContinue
+Save "13d_ps_execution_policy.txt" ($execPolicy | Format-Table -AutoSize | Out-String)
 
 # --- Webcam Investigation -----------------------------------------------------
 #
@@ -1962,7 +2157,181 @@ if ($autorunVal -ne $null) {
     Log "  [CIS 10.3] *** FLAGGED: NoDriveTypeAutoRun not set -- autorun policy not configured ***" "DarkYellow"
 }
 
-End-Section   # close CIS section 17
+End-Section   # close CIS shares/encryption section
+
+# --- CIS IG1 - SECURE CONFIGURATION ------------------------------------------
+
+Start-Section "CIS IG1 - SECURE CONFIGURATION" "SMBv1, LLMNR, screen lock, audit logging, PowerShell logging (CIS 4.1, 4.3, 8.3, 8.5)"
+
+# CIS 4.1 -- SMBv1 protocol (major attack vector -- WannaCry, EternalBlue)
+$smb1Enabled = $null
+try {
+    # Server-side SMBv1
+    $smb1Server = Get-SmbServerConfiguration -ErrorAction Stop
+    $smb1Enabled = $smb1Server.EnableSMB1Protocol
+} catch {
+    # Fallback: check the Windows Feature / registry
+    try {
+        $smb1Feature = Get-WindowsOptionalFeature -Online -FeatureName "SMB1Protocol" -ErrorAction Stop
+        $smb1Enabled = ($smb1Feature.State -eq "Enabled")
+    } catch {
+        $smb1Reg = Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters" -ErrorAction SilentlyContinue
+        if ($smb1Reg.PSObject.Properties.Name -contains "SMB1") {
+            $smb1Enabled = ($smb1Reg.SMB1 -ne 0)
+        }
+    }
+}
+$script:cisIG1.SMBv1Enabled = $smb1Enabled
+if ($smb1Enabled -eq $true) {
+    Log "  [CIS 4.1] *** FLAGGED: SMBv1 protocol is ENABLED -- vulnerable to EternalBlue/WannaCry ***" "DarkYellow"
+} elseif ($smb1Enabled -eq $false) {
+    Log "  [CIS 4.1] SMBv1 disabled" "DarkGray"
+} else {
+    Log "  [CIS 4.1] SMBv1 status could not be determined" "DarkGray"
+}
+
+# CIS 4.1 -- LLMNR disabled (prevents LLMNR poisoning / credential relay)
+$llmnrKey = "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient"
+$llmnrVal = (Get-ItemProperty $llmnrKey -ErrorAction SilentlyContinue).EnableMulticast
+# EnableMulticast = 0 means LLMNR is disabled (secure)
+if ($llmnrVal -eq 0) {
+    $script:cisIG1.LLMNRDisabled = $true
+    Log "  [CIS 4.1] LLMNR disabled via policy" "DarkGray"
+} else {
+    $script:cisIG1.LLMNRDisabled = $false
+    Log "  [CIS 4.1] *** FLAGGED: LLMNR is enabled -- vulnerable to name resolution poisoning ***" "DarkYellow"
+}
+
+# CIS 4.1 -- NetBIOS over TCP/IP (another name resolution poisoning vector)
+$nbDisabled = $true
+$adapters = Get-WmiObject Win32_NetworkAdapterConfiguration -Filter "IPEnabled=True" -ErrorAction SilentlyContinue
+foreach ($adapter in $adapters) {
+    # TcpipNetbiosOptions: 0=Default (DHCP), 1=Enabled, 2=Disabled
+    if ($adapter.TcpipNetbiosOptions -ne 2) {
+        $nbDisabled = $false
+    }
+}
+$script:cisIG1.NetBIOSDisabled = $nbDisabled
+if ($nbDisabled) {
+    Log "  [CIS 4.1] NetBIOS over TCP/IP disabled on all adapters" "DarkGray"
+} else {
+    Log "  [CIS 4.1] *** FLAGGED: NetBIOS over TCP/IP enabled on one or more adapters -- poisoning risk ***" "DarkYellow"
+}
+
+$secConfigReport = [ordered]@{
+    SMBv1Enabled   = $smb1Enabled
+    LLMNRDisabled  = $script:cisIG1.LLMNRDisabled
+    NetBIOSDisabled = $nbDisabled
+}
+$secConfigReport | ConvertTo-Json | Set-Content "$OutputPath\18_cis_secure_config.json" -Encoding UTF8
+
+# CIS 4.3 -- Automatic session locking (screen lock timeout)
+$screenLockTimeout = $null
+$screenLockSecure  = $null
+
+# Check Group Policy inactivity timeout first (takes precedence)
+$inactivityKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"
+$inactivityTimeout = (Get-ItemProperty $inactivityKey -ErrorAction SilentlyContinue).InactivityTimeoutSecs
+if ($inactivityTimeout) {
+    $screenLockTimeout = $inactivityTimeout
+}
+
+# Check per-user screensaver settings
+$ssTimeout = (Get-ItemProperty "HKCU:\Control Panel\Desktop" -ErrorAction SilentlyContinue).ScreenSaveTimeOut
+$ssSecure  = (Get-ItemProperty "HKCU:\Control Panel\Desktop" -ErrorAction SilentlyContinue).ScreenSaverIsSecure
+
+if (-not $screenLockTimeout -and $ssTimeout) {
+    $screenLockTimeout = [int]$ssTimeout
+}
+$screenLockSecure = ($ssSecure -eq "1") -or ($inactivityTimeout -and $inactivityTimeout -gt 0)
+
+$script:cisIG1.ScreenLockTimeout = $screenLockTimeout
+$script:cisIG1.ScreenLockEnabled = $screenLockSecure
+
+if (-not $screenLockTimeout -or $screenLockTimeout -eq 0) {
+    Log "  [CIS 4.3] *** FLAGGED: No automatic screen lock timeout configured ***" "DarkYellow"
+} elseif ($screenLockTimeout -gt 900) {
+    Log "  [CIS 4.3] *** FLAGGED: Screen lock timeout is $screenLockTimeout seconds ($([math]::Round($screenLockTimeout/60,0)) min) -- recommended max is 15 min ***" "DarkYellow"
+} else {
+    Log "  [CIS 4.3] Screen lock timeout: $screenLockTimeout seconds ($([math]::Round($screenLockTimeout/60,0)) min)" "DarkGray"
+}
+if (-not $screenLockSecure) {
+    Log "  [CIS 4.3] *** FLAGGED: Screen saver does not require password on resume ***" "DarkYellow"
+}
+
+[ordered]@{
+    InactivityTimeoutSecs  = $inactivityTimeout
+    ScreenSaverTimeout     = $ssTimeout
+    ScreenSaverIsSecure    = $ssSecure
+    EffectiveTimeoutSecs   = $screenLockTimeout
+    PasswordRequired       = $screenLockSecure
+} | ConvertTo-Json | Set-Content "$OutputPath\18_cis_screen_lock.json" -Encoding UTF8
+
+# CIS 8.3 -- Adequate audit log storage (check max log sizes)
+$logSizes = @{}
+foreach ($evtLogName in @("Security","System","Application","Windows PowerShell")) {
+    try {
+        $logObj = Get-WinEvent -ListLog $evtLogName -ErrorAction Stop
+        $maxMB  = [math]::Round($logObj.MaximumSizeInBytes / 1MB, 1)
+        $usedMB = [math]::Round($logObj.FileSize / 1MB, 1)
+        $logSizes[$evtLogName] = [ordered]@{
+            MaxSizeMB  = $maxMB
+            UsedMB     = $usedMB
+            RecordCount = $logObj.RecordCount
+            Retention  = $logObj.LogMode
+        }
+        if ($maxMB -lt 64 -and $evtLogName -eq "Security") {
+            Log "  [CIS 8.3] *** FLAGGED: Security log max size is only ${maxMB}MB (recommend 256MB+) ***" "DarkYellow"
+        } elseif ($maxMB -lt 32) {
+            Log "  [CIS 8.3] *** FLAGGED: $evtLogName log max size is only ${maxMB}MB ***" "DarkYellow"
+        } else {
+            Log "  [CIS 8.3] $evtLogName log: ${usedMB}MB / ${maxMB}MB ($($logObj.RecordCount) records, $($logObj.LogMode))" "DarkGray"
+        }
+    } catch {
+        Log "  [CIS 8.3] Could not query $evtLogName log size: $_" "DarkGray"
+    }
+}
+$script:cisIG1.AuditLogMaxSizes = $logSizes
+$logSizes | ConvertTo-Json -Depth 3 | Set-Content "$OutputPath\18_cis_audit_log_sizes.json" -Encoding UTF8
+
+# CIS 8.5 -- Detailed audit logging: PowerShell ScriptBlock and Module logging
+$psLogging = [ordered]@{}
+$sblKey = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging"
+$sblEnabled = (Get-ItemProperty $sblKey -ErrorAction SilentlyContinue).EnableScriptBlockLogging
+$psLogging.ScriptBlockLogging = ($sblEnabled -eq 1)
+$script:cisIG1.PSScriptBlockLogging = ($sblEnabled -eq 1)
+
+$mlKey = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ModuleLogging"
+$mlEnabled = (Get-ItemProperty $mlKey -ErrorAction SilentlyContinue).EnableModuleLogging
+$psLogging.ModuleLogging = ($mlEnabled -eq 1)
+$script:cisIG1.PSModuleLogging = ($mlEnabled -eq 1)
+
+# Also check transcription
+$trKey = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\Transcription"
+$trEnabled = (Get-ItemProperty $trKey -ErrorAction SilentlyContinue).EnableTranscripting
+$trDir = (Get-ItemProperty $trKey -ErrorAction SilentlyContinue).OutputDirectory
+$psLogging.Transcription = ($trEnabled -eq 1)
+$psLogging.TranscriptionDir = $trDir
+
+$psLogging | ConvertTo-Json | Set-Content "$OutputPath\18_cis_ps_logging.json" -Encoding UTF8
+
+if ($sblEnabled -ne 1) {
+    Log "  [CIS 8.5] *** FLAGGED: PowerShell Script Block Logging not enabled ***" "DarkYellow"
+} else {
+    Log "  [CIS 8.5] PowerShell Script Block Logging enabled" "DarkGray"
+}
+if ($mlEnabled -ne 1) {
+    Log "  [CIS 8.5] *** FLAGGED: PowerShell Module Logging not enabled ***" "DarkYellow"
+} else {
+    Log "  [CIS 8.5] PowerShell Module Logging enabled" "DarkGray"
+}
+if ($trEnabled -eq 1) {
+    Log "  [CIS 8.5] PowerShell Transcription enabled (output: $trDir)" "DarkGray"
+} else {
+    Log "  [CIS 8.5] PowerShell Transcription not enabled" "DarkGray"
+}
+
+End-Section   # close CIS secure configuration section
 
 # --- Summary JSON Files -------------------------------------------------------
 
@@ -2278,13 +2647,18 @@ NEXT STEPS:
        then: 14_webcam_access_history.txt  (who used camera and when)
        then: 14_webcam_access_UNEXPECTED.txt  (if it exists -- red flag)
        then: 09b_browser_keyword_FLAGGED.csv  (what were they researching?)
-  4. CIS IG1 gap files: 15_cis_dormant_FLAGGED.csv, 16_cis_pending_updates_FLAGGED.csv,
-       17_cis_shares_OVERPERMISSIVE_FLAGGED.csv
-  5. Open .db files in "DB Browser for SQLite" (https://sqlitebrowser.org)
-  6. Open .csv event logs in Excel or Timeline Explorer
-  7. Review all files marked _FLAGGED, _SUSPICIOUS, or _UNEXPECTED first.
-  8. If criminal activity found, stop -- preserve and contact law enforcement
-     BEFORE making any additional system changes.
+  4. CIS IG1 gap files:
+       15_cis_dormant_FLAGGED.csv, 16_cis_pending_updates_FLAGGED.csv,
+       17_cis_shares_OVERPERMISSIVE_FLAGGED.csv, 17_cis_bitlocker_status.csv,
+       18_cis_secure_config.json, 18_cis_screen_lock.json,
+       18_cis_audit_log_sizes.json, 18_cis_ps_logging.json
+  5. Forensic persistence: 13b_prefetch_FLAGGED.csv, 13c_wmi_persistence.csv
+  6. Security: 07_defender_exclusions.json (attacker abuse check)
+  7. Open .db files in "DB Browser for SQLite" (https://sqlitebrowser.org)
+  8. Open .csv event logs in Excel or Timeline Explorer
+  9. Review all files marked _FLAGGED, _SUSPICIOUS, or _UNEXPECTED first.
+  10. If criminal activity found, stop -- preserve and contact law enforcement
+      BEFORE making any additional system changes.
 ================================================
 "@
 Write-Host $summary -ForegroundColor Green
