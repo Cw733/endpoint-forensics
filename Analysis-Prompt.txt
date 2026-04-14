@@ -1,0 +1,494 @@
+==========================================================================
+  COLLECT-EVIDENCE.PS1 — ANALYSIS AND REPORT GENERATION INSTRUCTIONS
+  For use with GitHub Copilot CLI or any capable AI assistant
+==========================================================================
+
+HOW TO USE THIS FILE
+--------------------
+When you begin a new AI session to analyze evidence from Collect-Evidence.ps1,
+paste or feed this file to the AI first, then say:
+
+  "I have an evidence folder from Collect-Evidence.ps1 at [path].
+   Generate a security audit report following the instructions in the
+   prompt file I just provided."
+
+The AI will read the evidence files and produce a consistent, standardized
+report matching the format defined below.
+
+For investigation reports (specific user behavior), say:
+  "Also generate an investigation findings report for user [username]
+   following the investigation report format in the prompt file."
+
+
+==========================================================================
+  PART 1: WHAT COLLECT-EVIDENCE.PS1 COLLECTS
+==========================================================================
+
+The script produces a folder named Evidence_<HOSTNAME>_<TIMESTAMP>\
+containing the following numbered sections. When analyzing, read the
+files in this order for maximum efficiency.
+
+ALWAYS START WITH:
+  quick_indicators.json       -- Machine-generated risk flag summary
+  cis_ig1_gaps.json           -- CIS IG1 compliance gap summary
+  _collection_log.txt         -- Shows what ran, what was skipped, timing
+
+SECTION 00 -- METADATA
+  00_metadata.txt             -- Collection time, investigator, hostname, OS
+
+SECTION 01 -- SYSTEM INFORMATION
+  01_systeminfo.txt           -- Full systeminfo output (OS, domain, RAM, patches)
+  01_os_details.txt           -- WMI OS object (build, install date, last boot)
+  01_local_users.txt          -- All local accounts: enabled/disabled, last logon,
+                                 password last set
+  01_local_groups.txt         -- All local groups
+  01_group_members_admins.txt -- Members of local Administrators group
+
+SECTION 02 -- LOGON EVENTS (last 30 days)
+  02_logon_events.csv         -- Columns: Time, EventID, Meaning, User,
+                                 LogonType, SourceIP, Workstation
+                                 EventIDs: 4624=success, 4625=fail, 4648=runas,
+                                 4672=admin logon, 4720=account created,
+                                 4726=deleted, 4738=changed
+                                 LogonType: 2=interactive, 3=network, 10=RDP
+
+SECTION 03 -- RUNNING PROCESSES
+  03_processes.txt            -- All processes at collection time
+  03_processes_FLAGGED.txt    -- Processes matching known RAT/spy/tunnel keywords
+                                 (if this file exists, review immediately)
+
+SECTION 04 -- SERVICES
+  04_services_all.txt         -- All services and state
+  04_services_running.txt     -- Running services with paths and run-as accounts
+  04_services_SUSPICIOUS.txt  -- Services running from AppData/Temp/non-standard
+                                 paths (if exists, HIGH priority)
+
+SECTION 05 -- SCHEDULED TASKS
+  05_scheduled_tasks.txt      -- Active scheduled tasks with actions and triggers
+  05_scheduled_tasks_SUSPICIOUS.txt -- Tasks running scripts or from AppData/Temp
+
+SECTION 06 -- STARTUP / AUTORUN
+  06_autoruns_registry.txt    -- HKLM/HKCU Run keys
+  06_startup_folder.txt       -- Per-user and common startup folders
+
+SECTION 07 -- NETWORK STATE
+  07_netstat_connections.txt  -- Active network connections with PIDs
+  07_dns_cache.txt            -- DNS resolver cache (shows recent domain lookups,
+                                 even if browser history is cleared)
+  07_network_adapters.txt     -- All adapters (flag virtual/VPN adapters)
+  07_network_shares.txt       -- Mapped drives and UNC connections
+  07_listening_ports.txt      -- All listening ports with owning process
+
+SECTION 08 -- INSTALLED SOFTWARE
+  08_installed_software.txt   -- All installed applications with install dates
+
+SECTION 09 -- BROWSER HISTORY (per user, in user_<name>\ subfolder)
+  user_<name>\Chrome_Default\History     -- Chrome SQLite DB (copy for analysis)
+  user_<name>\Edge_Default\History       -- Edge SQLite DB
+  user_<name>\09b_browser_keyword_FLAGGED.csv -- Hits on financial/spy/exfil keywords
+  user_<name>\09c_browser_downloads_*.txt     -- Download history from SQLite
+
+  IMPORTANT: Chrome/Edge History files are SQLite databases. To read them:
+    Option A: Copy to a non-locked location, open in DB Browser for SQLite
+    Option B: Mine as binary with:
+      $bytes = [System.IO.File]::ReadAllBytes($path)
+      $text = [System.Text.Encoding]::UTF8.GetString($bytes)
+      $text -split "[\x00-\x08\x0B\x0C\x0E-\x1F]+" | Where-Object { $_.Length -gt 20 }
+
+SECTION 10 -- USB DEVICES
+  10_usb_device_history.txt   -- Devices ever connected (from registry)
+                                 Includes vendor, product, serial, first/last connect
+
+SECTION 11 -- CLOUD SYNC
+  user_<name>\cloud_sync_folders_FOUND.txt -- OneDrive/Dropbox/Google Drive folders
+                                              found on this machine
+
+SECTION 12 -- LARGE FILES
+  user_<name>\large_files_over50MB.csv -- Files >50MB: name, size, path, timestamps
+                                          Pay close attention to PST, ZIP, RAR files
+                                          and files with June 27 creation timestamps
+
+SECTION 13 -- SECURITY / ANTIVIRUS
+  13_defender_status.txt      -- Defender real-time, definitions date, last scan
+  13_av_products.txt          -- SecurityCenter2 registered AV products with
+                                 productState hex decode (active/inactive/defs current)
+  13_firewall_status.txt      -- Per-profile firewall state (Domain/Private/Public)
+  13_rdp_status.txt           -- RDP enabled/disabled, NLA required
+
+SECTION 14 -- WEBCAM INVESTIGATION
+  14_webcam_access_history.txt    -- Windows Consent Store: which apps accessed
+                                     camera and when (LastStart timestamps)
+  14_webcam_access_UNEXPECTED.txt -- Non-standard apps that accessed camera
+  14_webcam_related_processes.txt -- Processes with "cam" or "video" in name
+  14_webcam_ANALYST_NOTES.txt     -- Built-in analysis notes on webcam findings
+
+SECTIONS 15-17 -- CIS IG1 COMPLIANCE (added in v2)
+  15_cis_accounts_all.csv          -- Full account inventory
+  15_cis_dormant_FLAGGED.csv       -- Accounts inactive > 90 days (CIS 5.3)
+  15_cis_password_noexpire_FLAGGED.csv -- Accounts with non-expiring passwords (CIS 5.2)
+  15_cis_privileged_group_members.csv  -- Admin/RDP/Power Users membership (CIS 5.4)
+  15_cis_password_policy.txt       -- Local password policy (net accounts) (CIS 5.2)
+  16_cis_installed_hotfixes.csv    -- Patch history (CIS 7.3)
+  16_cis_pending_updates_FLAGGED.csv -- Pending Windows updates (CIS 7.3)
+  16_cis_os_build.txt              -- OS version/build for EOL check (CIS 7.4)
+  17_cis_shares_all.csv            -- All SMB shares with ACLs (CIS 12.2)
+  17_cis_shares_OVERPERMISSIVE_FLAGGED.csv -- Shares with Everyone/Users access (CIS 3.3)
+  17_cis_folder_broad_access.csv   -- User profile folders with broad ACLs (CIS 3.3)
+
+SUMMARY FILES
+  quick_indicators.json       -- Key flags: RDP, firewall, AV, remote access software,
+                                 suspicious process count, USB count, webcam hits
+  cis_ig1_gaps.json           -- CIS IG1 gap data: dormant accounts, patch age,
+                                 pending updates, share exposure
+  webcam_concern_summary.json -- Webcam-specific indicator summary
+
+
+==========================================================================
+  PART 2: HOW TO ANALYZE THE EVIDENCE
+==========================================================================
+
+STEP 1 -- ORIENT (2 minutes)
+  Read quick_indicators.json and cis_ig1_gaps.json first.
+  These give you the machine-generated flags before you read anything else.
+  Note: FirewallDisabledProfiles, RDPEnabled, RemoteAccessSoftwareHits,
+  DormantAccounts, DaysSinceLastPatch.
+
+STEP 2 -- SYSTEM BASELINE
+  Read 00_metadata.txt and 01_systeminfo.txt.
+  Note: OS version and build, domain membership (workgroup vs. AD),
+  last boot time, hotfix count, RAM/processor (for context on machine role).
+
+STEP 3 -- ACCOUNT REVIEW
+  Read 01_local_users.txt. Note any accounts with:
+  - Old or null LastLogon (dormant)
+  - No password set date
+  - Unusual account names
+
+  Read 01_group_members_admins.txt. Anyone in Administrators besides
+  the expected IT account and the built-in Administrator is a finding.
+
+  Read 15_cis_accounts_all.csv, 15_cis_dormant_FLAGGED.csv,
+  15_cis_password_noexpire_FLAGGED.csv.
+
+STEP 4 -- SECURITY POSTURE
+  Read 13_firewall_status.txt. Any profile (Private or Public) disabled
+  is a finding. Domain profile disabled on a non-domain machine is lower risk.
+
+  Read 13_rdp_status.txt. RDP enabled with no NLA = higher risk.
+  RDP enabled on a machine with firewall disabled = compound risk (CRITICAL).
+
+  Read 13_defender_status.txt. Check: realtime enabled, defs date vs. today,
+  last full scan (never = finding regardless of realtime status).
+
+STEP 5 -- PATCH STATUS
+  Read 16_cis_installed_hotfixes.csv (sort by InstalledOn descending).
+  Last patch > 30 days = MEDIUM. > 90 days = HIGH. > 180 days = CRITICAL.
+  Read 16_cis_pending_updates_FLAGGED.csv if it exists. Count Critical/Important.
+
+STEP 6 -- REMOTE ACCESS AND PERSISTENCE
+  Read 03_processes_FLAGGED.txt -- anything here is HIGH priority.
+  Read 04_services_SUSPICIOUS.txt -- services from non-standard paths.
+  Read 05_scheduled_tasks_SUSPICIOUS.txt -- tasks running scripts.
+  Read 06_autoruns_registry.txt -- look for non-Microsoft entries running
+  from AppData, Temp, or user-writable locations.
+  Read 08_installed_software.txt -- note: AnyDesk, TeamViewer, ScreenConnect,
+  FileZilla, WinSCP, any FTP or remote access client.
+
+STEP 7 -- NETWORK STATE
+  Read 07_dns_cache.txt -- look for unexpected external domains, cloud storage
+  (mega.nz, gofile.io, anonfiles, FTP services), VPN providers, or C2 patterns.
+  Read 07_netstat_connections.txt -- established connections to non-standard
+  external IPs during the collection.
+  Read 07_listening_ports.txt -- any process listening on 0.0.0.0 that isn't
+  a recognized system service is a finding.
+
+STEP 8 -- USER ACTIVITY (for targeted investigations)
+  Browser history files require binary mining (see SECTION 09 above).
+  Key things to search for in Chrome History binary:
+  - Financial system URLs (bank, ACH, accounting software)
+  - Cloud storage upload URLs (drive.google.com upload, onedrive upload,
+    dropbox upload, mega.co.nz, idrive.com)
+  - Remote display / remote access downloads
+  - Multiple Gmail accounts (u/0, u/1 pattern in URLs identifies each account)
+  - Contacts export URLs (contacts.google.com/u/N/export or /label/)
+  - File download records include: local save path, source URL, HTTP date header
+
+  Read large_files_over50MB.csv -- sort by CreationTime. Bulk creation of
+  large files (PST, ZIP, RAR) at the same timestamp = likely bulk copy operation.
+
+  Read 02_logon_events.csv -- filter to specific user and date of interest.
+  LogonType 10 = RDP. SourceIP for remote logons. After-hours logons are notable.
+
+STEP 9 -- SHARES AND DATA EXPOSURE
+  Read 17_cis_shares_all.csv and 17_cis_shares_OVERPERMISSIVE_FLAGGED.csv.
+  Non-admin shares readable by Everyone = MEDIUM-HIGH depending on contents.
+
+
+==========================================================================
+  PART 3: SECURITY AUDIT REPORT FORMAT
+==========================================================================
+
+Generate the security audit report in this exact format. The report covers
+infrastructure/configuration findings only -- no individual user accusations.
+Save as both .html and .docx (use Word COM automation for .docx conversion).
+
+--------------------------------------------------------------------------
+REPORT STRUCTURE:
+--------------------------------------------------------------------------
+
+1. EXECUTIVE SUMMARY (3-5 sentences)
+   Brief statement of scope, machines examined, overall risk posture,
+   and top priority. Written for a non-technical owner.
+
+2. SCOPE AND METHODOLOGY
+   - Systems examined (hostnames, OS versions)
+   - Collection date
+   - Tools used
+   - Limitations (e.g., log retention, offline machines)
+
+3. FINDINGS
+   Each finding formatted as:
+
+   3.X  [SEVERITY]  Finding Title
+   CIS Control: [Control number and name]
+
+   Description:
+   [What was found, on which machine(s), specific technical detail]
+
+   Risk:
+   [What could happen as a result -- business impact language]
+
+   Recommendation:
+   [Specific, actionable remediation steps]
+
+   Severity levels: CRITICAL / HIGH / MEDIUM / LOW / INFORMATIONAL
+
+4. CIS IG1 COMPLIANCE SUMMARY
+   Table with columns: CIS Control | Safeguard | Status | Finding Ref
+   Status values: PASS / FAIL / PARTIAL / NOT ASSESSED
+
+5. REGULATORY CONTEXT
+   For public water utilities: reference AWIA 2018, EPA cybersecurity
+   guidance, and CISA water sector advisories. Note that CIS IG1 is
+   the recommended baseline for water sector under EPA guidance.
+
+6. PRIORITIZED REMEDIATION ROADMAP
+   Three phases:
+   - Immediate (address within 30 days): CRITICAL findings
+   - Near-term (address within 90 days): HIGH findings
+   - Planned (address within 12 months): MEDIUM findings + MSP/M365 migration
+
+--------------------------------------------------------------------------
+FINDING SEVERITY CRITERIA:
+--------------------------------------------------------------------------
+CRITICAL: Can be exploited remotely with no authentication, or represents
+          active evidence of compromise. Example: firewall disabled + RDP
+          enabled + no NLA = unauthenticated remote code execution path.
+
+HIGH: Significant exposure requiring authentication or physical access to
+      exploit, or represents a serious compliance failure. Example:
+      shared/generic accounts, no MFA on financial systems.
+
+MEDIUM: Increases attack surface or complicates incident response but
+        requires chaining with other vulnerabilities. Example: password
+        never expires, no full AV scan history.
+
+LOW: Best practice deviation with limited direct exploitability.
+     Example: Windows Search indexing sensitive file types.
+
+INFORMATIONAL: Observations that inform remediation planning but are not
+               vulnerabilities themselves.
+
+--------------------------------------------------------------------------
+TONE AND STYLE:
+--------------------------------------------------------------------------
+- Do NOT write in AI-typical language ("It is worth noting that...",
+  "It's important to...", "In conclusion...", "Notably...")
+- Write in direct, professional technical report language
+- Use passive construction for findings: "RDP is enabled" not "You left RDP on"
+- Findings should stand alone -- a reader unfamiliar with the client should
+  understand each finding without reading others
+- Avoid Unicode symbols (no checkmarks, no arrows, no bullets beyond hyphens)
+- Do not pad findings with generic security advice -- be specific to what
+  was found on these specific machines
+- Remove all markdown formatting from the Word version
+
+
+==========================================================================
+  PART 4: INVESTIGATION REPORT FORMAT (user-specific findings)
+==========================================================================
+
+When generating a user-specific investigation report, use this format.
+This report is separate from the security audit and is for the owner's
+eyes only. It should be factual and evidence-cited -- no speculation.
+
+IMPORTANT: Only assert what the evidence directly shows. If something
+is suspicious but explainable, say so and note what would confirm or
+refute it. Do not imply guilt without direct evidence.
+
+--------------------------------------------------------------------------
+INVESTIGATION REPORT STRUCTURE:
+--------------------------------------------------------------------------
+
+1. PURPOSE AND SCOPE
+   Who authorized the investigation, which user, which machine,
+   date range of evidence examined.
+
+2. FINDINGS SUMMARY
+   Brief table: Finding | Evidence | Confidence (Confirmed/Probable/Possible)
+
+3. DETAILED FINDINGS
+   Each finding:
+   - What was observed (with specific file names and timestamps)
+   - What it means
+   - Alternative explanations if any
+   - What additional evidence would confirm it
+
+4. TIMELINE OF KEY EVENTS
+   Chronological table of notable events with source file cited for each.
+
+5. OPEN QUESTIONS
+   List specific things that need verification (physical receipts, IT
+   consultant confirmation, server-side logs, etc.)
+
+6. RECOMMENDED NEXT STEPS
+   What to do next -- second site visit items, server-side log reviews,
+   HR/legal consultation triggers.
+
+--------------------------------------------------------------------------
+CONFIDENCE LEVELS:
+--------------------------------------------------------------------------
+CONFIRMED:  Direct, unambiguous evidence. No innocent explanation fits.
+PROBABLE:   Strong evidence; innocent explanation exists but is unlikely
+            given the combination of findings.
+POSSIBLE:   Suspicious but explainable by normal business activity.
+            Requires corroboration before drawing conclusions.
+BENIGN:     Initially flagged, determined to have innocent explanation.
+
+
+==========================================================================
+  PART 5: CIS IG1 CONTROL MAPPING REFERENCE
+==========================================================================
+
+Use this to map evidence file findings to CIS Controls in the report.
+
+CIS 1.1  Asset Inventory            <- 00_metadata.txt, 01_systeminfo.txt
+CIS 2.1  Software Inventory         <- 08_installed_software.txt
+CIS 3.3  Data Access Controls       <- 17_cis_shares_*.csv, folder ACLs
+CIS 4.1  Secure Configuration       <- 13_firewall_status.txt, 13_rdp_status.txt
+CIS 4.2  Maintain Secure Config     <- 06_autoruns_registry.txt, 04_services_SUSPICIOUS.txt
+CIS 5.1  Account Inventory          <- 15_cis_accounts_all.csv, 01_local_users.txt
+CIS 5.2  Password Management        <- 15_cis_password_noexpire_FLAGGED.csv,
+                                        15_cis_password_policy.txt
+CIS 5.3  Disable Dormant Accounts   <- 15_cis_dormant_FLAGGED.csv
+CIS 5.4  Restrict Admin Privileges  <- 15_cis_privileged_group_members.csv,
+                                        01_group_members_admins.txt
+CIS 6.3  MFA for Remote Access      <- 13_rdp_status.txt (NLA check), VPN config
+CIS 6.5  MFA for Admin Access       <- No direct evidence file; noted as gap
+CIS 7.3  Patch Management           <- 16_cis_installed_hotfixes.csv,
+                                        16_cis_pending_updates_FLAGGED.csv
+CIS 7.4  Manage EOL Software        <- 16_cis_os_build.txt, 08_installed_software.txt
+CIS 8.2  Collect Audit Logs         <- 02_logon_events.csv (verifies logging active)
+CIS 8.7  Centralize Log Management  <- Absence of SIEM/central log = gap
+CIS 10.1 Anti-Malware Deployment    <- 13_defender_status.txt, 13_av_products.txt
+CIS 10.2 Anti-Malware Signatures    <- 13_defender_status.txt (definition date)
+CIS 11.1 Data Recovery Process      <- 08_installed_software.txt (backup software present)
+CIS 11.4 Isolated Recovery Data     <- No direct evidence file; noted as gap
+CIS 12.2 Network Infrastructure     <- 07_listening_ports.txt, 17_cis_shares_all.csv,
+                                        13_firewall_status.txt
+
+
+==========================================================================
+  PART 6: COMMON IOC PATTERNS TO WATCH FOR
+==========================================================================
+
+These patterns in the evidence files warrant investigation:
+
+REMOTE ACCESS TOOLS (03_processes_FLAGGED.txt, 08_installed_software.txt):
+  AnyDesk, TeamViewer, ScreenConnect, ConnectWise Control, LogMeIn,
+  GoToAssist, Ammyy Admin, UltraVNC, DWService, RustDesk
+  -> Normal for IT support (one-time, customer-initiated)
+  -> Suspicious if running as a service (persistent), or if user installed it
+
+FTP/FILE TRANSFER TOOLS:
+  FileZilla, WinSCP, CuteFTP, Total Commander FTP
+  -> Check FileZilla recentservers.xml for destination servers
+  -> Any external FTP destination = HIGH priority follow-up
+
+CLOUD STORAGE EXFIL INDICATORS (07_dns_cache.txt, browser history):
+  mega.nz, gofile.io, anonfiles.com, sendspace.com, zippyshare.com
+  = unauthorized cloud drop sites (HIGH-CRITICAL)
+  rclone = command-line cloud sync tool, often used for bulk exfil
+
+BROWSER HISTORY PATTERNS:
+  Multiple signed-in Google accounts (u/0, u/1 in URLs) = normal but
+  note which account accesses company resources vs. personal resources
+  Contacts export URLs (contacts.google.com/.../export) = review what
+  account the export came from and what label was exported
+  Financial system URLs + download of financial docs = within role unless
+  combined with other exfil indicators
+
+PST FILE ANALYSIS:
+  PST files for OTHER users' mailboxes on the target user's machine = HIGH
+  Multiple PST files created at identical timestamps = bulk copy operation
+  Large PST files (>500MB) combined with cloud backup tool = exfil risk
+
+JUNE 27 SPECIFIC PATTERN (for GPWC investigation):
+  Look for: IDrive installer download, PST creation timestamps, logon events,
+  task scheduler events, and browser activity on 2025-06-27.
+  The combination of PST bulk creation + IDrive reinstall on the same day
+  with no confirmed IT visit is the core unresolved finding.
+
+
+==========================================================================
+  PART 7: GATHERING CLIENT CONTEXT
+==========================================================================
+
+Before beginning analysis, always ask the user for client-specific context.
+This context directly affects how findings are classified (suspicious vs.
+normal business activity) and what regulatory requirements apply.
+
+Ask the following questions before reading any evidence files. If the user
+has already provided some answers, skip those questions.
+
+REQUIRED QUESTIONS:
+
+1. "What type of business is this, and are they subject to any regulatory
+   frameworks? (e.g., public utility, healthcare, financial services,
+   government contractor)"
+
+2. "What are the machine names or hostnames I will be analyzing, and what
+   is each machine's role? (e.g., front desk, server, shop floor)"
+
+3. "Is there a specific user whose behavior is the focus of this
+   investigation, and what is their job role/responsibilities?"
+
+4. "Who is the IT contact or MSP for this company, and when did they
+   last have physical access to the machines?"
+
+5. "What software is known to be legitimately installed? List any remote
+   access tools, backup software, financial systems, or custom line-of-
+   business applications that are expected."
+
+6. "Are there any shared or generic accounts that are intentionally used
+   by multiple people? (e.g., a timeclock login, a shared service account)"
+
+7. "Is there a perimeter firewall in place, and if so, what make/model?"
+
+OPTIONAL BUT USEFUL:
+
+8. "Are there any events or dates of particular interest I should focus on?"
+
+9. "Have there been any recent personnel changes, IT visits, or unusual
+   incidents before this investigation was initiated?"
+
+10. "What is the investigative goal -- general security audit, specific
+    user investigation, or both?"
+
+Once context is gathered, proceed with analysis following Parts 1-6.
+Reference the client context throughout to distinguish normal business
+activity from genuinely suspicious findings. Document which findings
+required context to classify (this helps identify gaps in documentation
+and policy at the client site).
+
+==========================================================================
