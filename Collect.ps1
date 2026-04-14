@@ -430,7 +430,7 @@ try {
 
 # --- System Information -------------------------------------------------------
 
-Start-Section "SYSTEM INFORMATION" "OS version, BIOS, local accounts -- systeminfo may take ~20s (network name resolution)"
+Start-Section "SYSTEM INFORMATION" "OS version, BIOS, local accounts (CIS 1.1 asset inventory) -- systeminfo may take ~20s (network name resolution)"
 Save "01_systeminfo.txt" (systeminfo 2>&1)
 Save "01_os_details.txt"  (Get-WmiObject Win32_OperatingSystem | Format-List * | Out-String)
 Save "01_bios.txt"        (Get-WmiObject Win32_BIOS | Format-List * | Out-String)
@@ -443,7 +443,7 @@ Save "01_group_members_admins.txt" (
 
 # --- Logon & Authentication Events -------------------------------------------
 
-Start-Section "LOGON EVENTS" "Last 30 days of Security log: successes, failures, after-hours logins, privilege use"
+Start-Section "LOGON EVENTS" "Last 30 days of Security log: successes, failures, after-hours logins, privilege use (CIS 8.2 -- validates audit logging is active)"
 $since = (Get-Date).AddDays(-30)
 $_logonStatusFile = "$env:TEMP\ce_logon_status.tmp"
 
@@ -625,7 +625,7 @@ Save "06_startup_folders.txt" ($startupItems | Format-Table FullName, LastWriteT
 
 # --- Network State ------------------------------------------------------------
 
-Start-Section "NETWORK STATE" "Active connections, external IPs, DNS/ARP/routing, firewall, proxies, tunnels, BITS"
+Start-Section "NETWORK STATE" "Active connections, external IPs, DNS/ARP/routing, firewall rules, proxies, tunnels, BITS (CIS 4.1, 4.4/4.5 firewall and network config)"
 Save "07_netstat.txt"        (netstat -ano 2>&1)
 Save "07_dns_cache.txt"      (ipconfig /displaydns 2>&1)
 Save "07_arp_cache.txt"      (arp -a 2>&1)
@@ -986,7 +986,7 @@ try {
 
 # --- Installed Software -------------------------------------------------------
 
-Start-Section "INSTALLED SOFTWARE" "All installed programs; flags RATs, keyloggers, tunnel tools, bulk-copy utilities"
+Start-Section "INSTALLED SOFTWARE" "All installed programs with dates; flags RATs, keyloggers, tunnel tools, bulk-copy utilities (CIS 2.1 software inventory)"
 $installed = @(
     Get-ItemProperty "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue
     Get-ItemProperty "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue
@@ -1025,7 +1025,7 @@ $script:indicators.RemoteAccessSoftwareHits = @($flaggedSoftware | Select-Object
 
 # --- USB / Removable Device History ------------------------------------------
 
-Start-Section "USB DEVICE HISTORY" "Every USB storage device ever connected via registry (USBSTOR)"
+Start-Section "USB DEVICE HISTORY" "Every USB storage device ever connected via registry (USBSTOR) -- removable media / data exfil tracking (CIS 3.6)"
 $usbHistory = @()
 try {
     foreach ($class in Get-ChildItem "HKLM:\SYSTEM\CurrentControlSet\Enum\USBSTOR" -ErrorAction Stop) {
@@ -1327,7 +1327,7 @@ if ($kwHits.Count -gt 0) {
 
 # --- Event Logs (System & Application) ---------------------------------------
 
-Start-Section "EVENT LOGS" "Security, System, Application -- last 7 days, max 2000 events each"
+Start-Section "EVENT LOGS" "Security, System, Application -- last 7 days, max 2000 events each (CIS 8.2 audit log export)"
 $logSince = (Get-Date).AddDays(-7)
 
 # Pre-query: show size of each log so user knows what to expect
@@ -1414,7 +1414,7 @@ Invoke-Skippable -Label "event log export (Security + System + Application)" -St
 
 # --- File Share & Mapped Drives ----------------------------------------------
 
-Start-Section "SHARES & MAPPED DRIVES" "SMB shares, mapped drives, open sessions and open files"
+Start-Section "SHARES & MAPPED DRIVES" "SMB shares, mapped drives, open sessions and open files (CIS 3.3, 12.2 -- raw collection; ACL compliance analysis in CIS IG1 section below)"
 Save "11_network_shares.txt"  (Get-SmbShare | Format-Table -AutoSize | Out-String)
 Save "11_mapped_drives.txt"   (Get-PSDrive -PSProvider FileSystem | Format-Table -AutoSize | Out-String)
 Save "11_open_sessions.txt"   (Get-SmbSession | Format-Table -AutoSize | Out-String)
@@ -2019,8 +2019,8 @@ $w32Status = & w32tm /query /status 2>&1
 $w32Config = & w32tm /query /configuration 2>&1
 "=== w32tm /query /status ===`n$($w32Status -join "`n")`n`n=== w32tm /query /configuration ===`n$($w32Config -join "`n")" |
     Set-Content "$OutputPath\16_cis_ntp_status.txt" -Encoding UTF8
-$sourceLines = $w32Status | Where-Object { $_ -match "^Source\s*:" }
-$ntpSource = if ($sourceLines) { ($sourceLines[0] -split ":",2)[1].Trim() } else { "unknown" }
+$sourceLine = $w32Status | Where-Object { $_ -match "^Source\s*:" } | Select-Object -First 1
+$ntpSource = if ($sourceLine) { ($sourceLine -split ":",2)[1].Trim() } else { "unknown" }
 $script:cisIG1.NTPSource = $ntpSource
 if ($ntpSource -match "Local CMOS|Free-running|VM IC") {
     $script:cisIG1.NTPSynced = $false
