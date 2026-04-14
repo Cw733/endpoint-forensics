@@ -1,0 +1,14 @@
+# Set execution policy for current session
+Set-ExecutionPolicy -Scope Process Bypass
+
+# Run evidence collection (outputs next to script)
+.\Collect-Evidence.ps1
+
+# Target a specific user
+.\Collect-Evidence.ps1 -TargetUser "username"
+
+# Specify output path
+.\Collect-Evidence.ps1 -OutputRoot "E:\Audits"
+
+# Run targeted investigation script
+powershell -ExecutionPolicy Bypass -File .\Targeted-Investigation.ps1
