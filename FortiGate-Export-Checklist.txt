@@ -1,0 +1,163 @@
+============================================================
+  FORTINET FORTIGATE — ON-SITE EXPORT CHECKLIST
+  <Client Name>
+============================================================
+
+Note the FortiGate model and firmware version before starting.
+  Model: ___________________________
+  Firmware: ________________________
+  Management IP: ___________________
+
+
+------------------------------------------------------------
+  1. CONFIGURATION BACKUP
+------------------------------------------------------------
+Location: System > Configuration > Backup
+  OR:      Dashboard > top-right menu > Backup
+
+  - Format: .conf file (plain text)
+  - Save as: CLIENT_FortiGate_config_<date>.conf
+  - Contains: all firewall policies, NAT rules, VPN settings,
+    admin accounts, interfaces, routing, DNS, NTP, port
+    forwards, enabled services
+
+  This is the single most important export for the audit.
+
+
+------------------------------------------------------------
+  2. EVENT LOGS  (admin activity, config changes, VPN)
+------------------------------------------------------------
+Location: Log & Report > Events
+
+  Sub-categories to export separately if available:
+    - System Events   (admin logins, logouts, config changes)
+    - VPN Events      (SSL-VPN and IPsec connections)
+    - User Events     (authentication activity)
+
+  Filter: All available history (check how far back logs go)
+  Also filter: the incident date specifically if logs go back that far
+  Export format: CSV
+
+  Save as:
+    CLIENT_events_system_<date>.csv
+    CLIENT_events_vpn_<date>.csv
+
+  KEY QUESTION: Does the incident date appear in the log date range?
+  Note the oldest log date here: ___________________________
+
+
+------------------------------------------------------------
+  3. TRAFFIC LOGS  (outbound connections, data transfers)
+------------------------------------------------------------
+Location: Log & Report > Forward Traffic
+
+  Filter 1 — Full recent history:
+    Date: all available
+    Export format: CSV
+    Save as: CLIENT_traffic_recent_<date>.csv
+
+  Filter 2 — Incident date (if available):
+    Date: <incident date>
+    Source IP: <target machine internal IP>   IP: _______________
+    Export format: CSV
+    Save as: CLIENT_traffic_incident_date.csv
+
+  Note: Traffic logs can be large. If the export is very large,
+  filter to the incident date only first, then decide on full history.
+
+
+------------------------------------------------------------
+  4. SECURITY LOGS  (IPS, AV, web filter events)
+------------------------------------------------------------
+Location: Log & Report > Security Events
+  OR:      Log & Report > Intrusion Prevention
+           Log & Report > Application Control
+           Log & Report > Web Filter
+
+  - Export all available history
+  - Format: CSV
+  - Save as: CLIENT_security_events_<date>.csv
+
+  These show blocked/flagged activity — useful for finding
+  anything the firewall caught that shouldn't have been attempted.
+
+
+------------------------------------------------------------
+  5. POLICY LIST  (firewall rules review)
+------------------------------------------------------------
+Location: Policy & Objects > Firewall Policy
+
+  Option A (preferred): Included in config backup above.
+
+  Option B (quick visual):
+    - Screenshot or export the policy table to CSV if the
+      GUI offers it (some firmware versions do)
+    - Note any ANY/ANY rules, rules with logging disabled,
+      or inbound rules allowing external access to internal IPs
+
+  Look specifically for:
+    - Port forwarding rules (inbound from WAN to internal hosts)
+    - RDP (TCP 3389) allowed inbound
+    - Any rule with source = ALL and destination = internal network
+    - Rules where logging is disabled
+
+
+------------------------------------------------------------
+  6. VPN CONFIGURATION REVIEW  (while logged in)
+------------------------------------------------------------
+Location: VPN > SSL-VPN Settings
+          VPN > IPsec Tunnels
+
+  Note / screenshot:
+    - Is SSL-VPN enabled? On which interface/port?
+    - What authentication method? (local users, LDAP, cert)
+    - What IP range is assigned to VPN clients?
+    - Which users or groups have VPN access?
+    - Are there any active or recent IPsec tunnels to unknown peers?
+
+
+------------------------------------------------------------
+  7. ADMIN ACCOUNTS
+------------------------------------------------------------
+Location: System > Administrators
+
+  Note all admin accounts:
+    Username / Profile / Last Login / Trusted Hosts (if set)
+  
+  Flags to watch for:
+    - Accounts with no trusted host restriction (can log in from anywhere)
+    - Any unfamiliar usernames
+    - Admin accounts with full read/write vs. read-only
+
+
+------------------------------------------------------------
+  8. LOG RETENTION CHECK
+------------------------------------------------------------
+Location: Log & Report > Log Settings
+  OR:      System > Advanced > Log Settings
+
+  Note:
+    - Where are logs stored? (local disk / FortiCloud / FortiAnalyzer)
+    - If FortiCloud: log into FortiCloud for extended history
+    - If FortiAnalyzer: note the FAZ IP for separate review
+    - Local disk retention period (days): ___________________
+    - Oldest available log date: ___________________________
+
+  If logs are only stored locally and the device is a small model
+  (60F, 80F, 100F range), incident date logs may be overwritten.
+  FortiCloud free tier retains 7 days. Paid retains 1 year.
+
+
+------------------------------------------------------------
+  SAVE ALL EXPORTS TO:  E:\<Client>-Fortinet\
+------------------------------------------------------------
+
+  Naming convention:
+    CLIENT_FortiGate_config_YYYYMMDD.conf
+    CLIENT_events_system_YYYYMMDD.csv
+    CLIENT_events_vpn_YYYYMMDD.csv
+    CLIENT_traffic_recent_YYYYMMDD.csv
+    CLIENT_traffic_incident_date.csv
+    CLIENT_security_events_YYYYMMDD.csv
+
+============================================================
