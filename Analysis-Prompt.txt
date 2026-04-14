@@ -78,6 +78,20 @@ SECTION 07 -- NETWORK STATE
   07_network_adapters.txt     -- All adapters (flag virtual/VPN adapters)
   07_network_shares.txt       -- Mapped drives and UNC connections
   07_listening_ports.txt      -- All listening ports with owning process
+  07_external_connections.csv -- Established connections to external IPs with rDNS
+  07_firewall_profiles.txt    -- Per-profile firewall state (Domain/Private/Public)
+  07_firewall_inbound_allow_rules.txt -- Inbound allow rules (non-Domain)
+  07_firewall_broad_rules_FLAGGED.txt -- Rules allowing Any port (if exists)
+  07_rdp_settings.json        -- RDP enabled/disabled, NLA required
+  07_defender_status.json     -- Defender real-time, behavior monitor, scan history,
+                                 signature age, tamper protection
+  07_defender_exclusions.json -- Defender exclusion paths/extensions/processes
+                                 (attackers add exclusions to hide malware)
+  07_av_products.json         -- SecurityCenter2 registered AV products with
+                                 productState hex decode (active/inactive/defs current)
+  07_proxy_settings.txt       -- WinINET and WinHTTP proxy configuration
+  07_bits_jobs.txt            -- BITS transfer jobs (check for stealthy exfil)
+  07_portproxy.txt            -- netsh portproxy rules (silent port forwarding)
 
 SECTION 08 -- INSTALLED SOFTWARE
   08_installed_software.txt   -- All installed applications with install dates
@@ -85,8 +99,8 @@ SECTION 08 -- INSTALLED SOFTWARE
 SECTION 09 -- BROWSER HISTORY (per user, in user_<name>\ subfolder)
   user_<name>\Chrome_Default\History     -- Chrome SQLite DB (copy for analysis)
   user_<name>\Edge_Default\History       -- Edge SQLite DB
-  user_<name>\09b_browser_keyword_FLAGGED.csv -- Hits on financial/spy/exfil keywords
-  user_<name>\09c_browser_downloads_*.txt     -- Download history from SQLite
+  09b_browser_keyword_FLAGGED.csv        -- Hits on spy/exfil/RAT keywords
+  09b_browser_keyword_summary.txt        -- Keyword hit counts by keyword
 
   IMPORTANT: Chrome/Edge History files are SQLite databases. To read them:
     Option A: Copy to a non-locked location, open in DB Browser for SQLite
@@ -95,25 +109,30 @@ SECTION 09 -- BROWSER HISTORY (per user, in user_<name>\ subfolder)
       $text = [System.Text.Encoding]::UTF8.GetString($bytes)
       $text -split "[\x00-\x08\x0B\x0C\x0E-\x1F]+" | Where-Object { $_.Length -gt 20 }
 
-SECTION 10 -- USB DEVICES
+SECTION 10 -- USB DEVICES & EVENT LOGS
   10_usb_device_history.txt   -- Devices ever connected (from registry)
                                  Includes vendor, product, serial, first/last connect
+  10_security_events.csv      -- Security log events (last 7 days)
+  10_system_events.csv        -- System log events (last 7 days)
+  10_application_events.csv   -- Application log events (last 7 days)
+  10_highvalue_event_summary.txt -- Counts of high-value event IDs
 
-SECTION 11 -- CLOUD SYNC
-  user_<name>\cloud_sync_folders_FOUND.txt -- OneDrive/Dropbox/Google Drive folders
-                                              found on this machine
+SECTION 11 -- SHARES & MAPPED DRIVES
+  11_network_shares.txt       -- SMB shares on this machine
+  11_mapped_drives.txt        -- Mapped drive letters
+  11_open_sessions.txt        -- Active SMB sessions
+  11_open_files.txt           -- Currently open SMB files
 
-SECTION 12 -- LARGE FILES
-  user_<name>\large_files_over50MB.csv -- Files >50MB: name, size, path, timestamps
-                                          Pay close attention to PST, ZIP, RAR files
-                                          and files with June 27 creation timestamps
+SECTION 12 -- HOSTS FILE / DNS
+  12_hosts_file.txt           -- Copy of hosts file (check for redirects)
+  12_dns_client_config.txt    -- DNS server configuration per adapter
 
-SECTION 13 -- SECURITY / ANTIVIRUS
-  13_defender_status.txt      -- Defender real-time, definitions date, last scan
-  13_av_products.txt          -- SecurityCenter2 registered AV products with
-                                 productState hex decode (active/inactive/defs current)
-  13_firewall_status.txt      -- Per-profile firewall state (Domain/Private/Public)
-  13_rdp_status.txt           -- RDP enabled/disabled, NLA required
+SECTION 13 -- PERSISTENCE
+  13_registry_persistence.txt -- Winlogon, BootExecute, IFEO, BHO registry keys
+  13b_prefetch_files.csv      -- All Prefetch entries (every EXE ever launched)
+  13b_prefetch_FLAGGED.csv    -- Prefetch entries for known attack tools (if exists)
+  13c_wmi_persistence.csv     -- WMI event subscriptions (stealthy persistence)
+  13d_ps_execution_policy.txt -- PowerShell execution policy per scope
 
 SECTION 14 -- WEBCAM INVESTIGATION
   14_webcam_access_history.txt    -- Windows Consent Store: which apps accessed
@@ -122,8 +141,8 @@ SECTION 14 -- WEBCAM INVESTIGATION
   14_webcam_related_processes.txt -- Processes with "cam" or "video" in name
   14_webcam_ANALYST_NOTES.txt     -- Built-in analysis notes on webcam findings
 
-SECTIONS 15-17 -- CIS IG1 COMPLIANCE (added in v2)
-  15_cis_accounts_all.csv          -- Full account inventory
+SECTIONS 15-18 -- CIS IG1 COMPLIANCE
+  15_cis_accounts_all.csv          -- Full account inventory (CIS 5.1)
   15_cis_dormant_FLAGGED.csv       -- Accounts inactive > 90 days (CIS 5.3)
   15_cis_password_noexpire_FLAGGED.csv -- Accounts with non-expiring passwords (CIS 5.2)
   15_cis_privileged_group_members.csv  -- Admin/RDP/Power Users membership (CIS 5.4)
@@ -131,15 +150,21 @@ SECTIONS 15-17 -- CIS IG1 COMPLIANCE (added in v2)
   16_cis_installed_hotfixes.csv    -- Patch history (CIS 7.3)
   16_cis_pending_updates_FLAGGED.csv -- Pending Windows updates (CIS 7.3)
   16_cis_os_build.txt              -- OS version/build for EOL check (CIS 7.4)
+  16_cis_ntp_status.txt            -- NTP / time synchronization (CIS 8.4)
   17_cis_shares_all.csv            -- All SMB shares with ACLs (CIS 12.2)
   17_cis_shares_OVERPERMISSIVE_FLAGGED.csv -- Shares with Everyone/Users access (CIS 3.3)
   17_cis_folder_broad_access.csv   -- User profile folders with broad ACLs (CIS 3.3)
+  17_cis_bitlocker_status.csv      -- Drive encryption status (CIS 3.6)
+  18_cis_secure_config.json        -- SMBv1, LLMNR, NetBIOS status (CIS 4.1)
+  18_cis_screen_lock.json          -- Screen lock / inactivity timeout (CIS 4.3)
+  18_cis_audit_log_sizes.json      -- Event log max sizes and retention (CIS 8.3)
+  18_cis_ps_logging.json           -- PowerShell ScriptBlock/Module/Transcription logging (CIS 8.5)
 
 SUMMARY FILES
-  quick_indicators.json       -- Key flags: RDP, firewall, AV, remote access software,
-                                 suspicious process count, USB count, webcam hits
-  cis_ig1_gaps.json           -- CIS IG1 gap data: dormant accounts, patch age,
-                                 pending updates, share exposure
+  quick_indicators.json       -- Key flags: public IP, RDP, firewall, AV, remote
+                                 access software, suspicious process count, webcam hits
+  cis_ig1_gaps.json           -- CIS IG1 gap data: all automated compliance checks
+                                 in a single JSON for report generation
   webcam_concern_summary.json -- Webcam-specific indicator summary
 
 
@@ -171,19 +196,35 @@ STEP 3 -- ACCOUNT REVIEW
   15_cis_password_noexpire_FLAGGED.csv.
 
 STEP 4 -- SECURITY POSTURE
-  Read 13_firewall_status.txt. Any profile (Private or Public) disabled
+  Read 07_firewall_profiles.txt. Any profile (Private or Public) disabled
   is a finding. Domain profile disabled on a non-domain machine is lower risk.
 
-  Read 13_rdp_status.txt. RDP enabled with no NLA = higher risk.
+  Read 07_rdp_settings.json. RDP enabled with no NLA = higher risk.
   RDP enabled on a machine with firewall disabled = compound risk (CRITICAL).
 
-  Read 13_defender_status.txt. Check: realtime enabled, defs date vs. today,
-  last full scan (never = finding regardless of realtime status).
+  Read 07_defender_status.json. Check: realtime enabled, behavior monitor,
+  defs age vs. today, last full scan (never = finding regardless of realtime).
 
-STEP 5 -- PATCH STATUS
+  Read 07_defender_exclusions.json. Any exclusion paths pointing to Temp,
+  AppData, or user-writable directories = potential attacker abuse (HIGH).
+
+  Read 18_cis_secure_config.json. SMBv1 enabled = CRITICAL.
+  LLMNR or NetBIOS enabled = MEDIUM-HIGH (credential relay attacks).
+
+  Read 18_cis_screen_lock.json. No screen lock = MEDIUM.
+  Timeout > 15 min = LOW. No password on resume = MEDIUM.
+
+STEP 5 -- PATCH STATUS AND AUDIT LOGGING
   Read 16_cis_installed_hotfixes.csv (sort by InstalledOn descending).
   Last patch > 30 days = MEDIUM. > 90 days = HIGH. > 180 days = CRITICAL.
   Read 16_cis_pending_updates_FLAGGED.csv if it exists. Count Critical/Important.
+
+  Read 18_cis_audit_log_sizes.json. Security log < 64MB = finding.
+  Other logs < 32MB = finding. Note retention mode (Circular vs Archive).
+
+  Read 18_cis_ps_logging.json. Script Block Logging disabled = MEDIUM.
+  Module Logging disabled = LOW. Both disabled = MEDIUM-HIGH (no PowerShell
+  forensic trail for incident response).
 
 STEP 6 -- REMOTE ACCESS AND PERSISTENCE
   Read 03_processes_FLAGGED.txt -- anything here is HIGH priority.
@@ -194,13 +235,30 @@ STEP 6 -- REMOTE ACCESS AND PERSISTENCE
   Read 08_installed_software.txt -- note: AnyDesk, TeamViewer, ScreenConnect,
   FileZilla, WinSCP, any FTP or remote access client.
 
-STEP 7 -- NETWORK STATE
+  Read 13b_prefetch_FLAGGED.csv -- if this file exists, it means known
+  attack tools were executed on this machine at some point (HIGH-CRITICAL).
+  Even if the tools have since been deleted, Prefetch proves execution.
+
+  Read 13c_wmi_persistence.csv -- any WMI event subscriptions are suspicious
+  on workstations. ActiveScriptEventConsumer or CommandLineEventConsumer
+  entries are almost always malicious (HIGH-CRITICAL).
+
+  Read 13_registry_persistence.txt -- check Winlogon Shell/Userinit for
+  unexpected entries, BootExecute for non-standard values, IFEO debugger
+  entries (used for persistence and defense evasion).
+
+STEP 7 -- NETWORK STATE AND EXTERNAL EXPOSURE
+  Read 00_metadata.txt for the public IP address. Note this for potential
+  external port scanning (Shodan, nmap) to assess internet-facing exposure.
+
   Read 07_dns_cache.txt -- look for unexpected external domains, cloud storage
   (mega.nz, gofile.io, anonfiles, FTP services), VPN providers, or C2 patterns.
   Read 07_netstat_connections.txt -- established connections to non-standard
   external IPs during the collection.
   Read 07_listening_ports.txt -- any process listening on 0.0.0.0 that isn't
   a recognized system service is a finding.
+  Read 07_bits_jobs.txt -- upload-type BITS jobs to non-Microsoft destinations
+  are potential exfiltration (HIGH).
 
 STEP 8 -- USER ACTIVITY (for targeted investigations)
   Browser history files require binary mining (see SECTION 09 above).
@@ -264,8 +322,22 @@ REPORT STRUCTURE:
    Severity levels: CRITICAL / HIGH / MEDIUM / LOW / INFORMATIONAL
 
 4. CIS IG1 COMPLIANCE SUMMARY
-   Table with columns: CIS Control | Safeguard | Status | Finding Ref
+   Generate a comprehensive CIS IG1 compliance table from cis_ig1_gaps.json
+   and the evidence files. The table must cover EVERY CIS IG1 safeguard
+   that the script checks, organized by CIS Control number.
+
+   Table columns: CIS Control | Safeguard | Status | Evidence File | Finding Ref
    Status values: PASS / FAIL / PARTIAL / NOT ASSESSED
+
+   Group findings by CIS Control number so the report reads as a CIS IG1 audit.
+   For controls marked NOT ASSESSED, note whether they require manual review
+   (network-level controls, policy reviews, training records) and reference
+   the CIS-IG1-Manual-Checklist.txt companion document.
+
+   At minimum, the following controls MUST be individually assessed:
+   CIS 1.1, 2.1, 3.3, 3.6, 4.1, 4.3, 4.4/4.5, 4.7,
+   5.1, 5.2, 5.3, 5.4, 7.3, 7.4, 8.2, 8.3, 8.4, 8.5,
+   9.1, 10.1, 10.2, 10.3, 10.4, 10.7, 12.2
 
 5. REGULATORY CONTEXT
    For public water utilities: reference AWIA 2018, EPA cybersecurity
@@ -374,28 +446,39 @@ Use this to map evidence file findings to CIS Controls in the report.
 
 CIS 1.1  Asset Inventory            <- 00_metadata.txt, 01_systeminfo.txt
 CIS 2.1  Software Inventory         <- 08_installed_software.txt
-CIS 3.3  Data Access Controls       <- 17_cis_shares_*.csv, folder ACLs
-CIS 4.1  Secure Configuration       <- 13_firewall_status.txt, 13_rdp_status.txt
+CIS 3.3  Data Access Controls       <- 17_cis_shares_*.csv, 17_cis_folder_broad_access.csv
+CIS 3.6  Encrypt End-User Devices   <- 17_cis_bitlocker_status.csv
+CIS 4.1  Secure Configuration       <- 18_cis_secure_config.json (SMBv1, LLMNR, NetBIOS),
+                                        07_firewall_profiles.txt, 07_rdp_settings.json
 CIS 4.2  Maintain Secure Config     <- 06_autoruns_registry.txt, 04_services_SUSPICIOUS.txt
+CIS 4.3  Auto Session Locking       <- 18_cis_screen_lock.json
+CIS 4.7  Default Account Mgmt      <- 15_cis_accounts_all.csv (Admin/Guest status)
 CIS 5.1  Account Inventory          <- 15_cis_accounts_all.csv, 01_local_users.txt
 CIS 5.2  Password Management        <- 15_cis_password_noexpire_FLAGGED.csv,
                                         15_cis_password_policy.txt
 CIS 5.3  Disable Dormant Accounts   <- 15_cis_dormant_FLAGGED.csv
 CIS 5.4  Restrict Admin Privileges  <- 15_cis_privileged_group_members.csv,
                                         01_group_members_admins.txt
-CIS 6.3  MFA for Remote Access      <- 13_rdp_status.txt (NLA check), VPN config
+CIS 6.3  MFA for Remote Access      <- 07_rdp_settings.json (NLA check), VPN config
 CIS 6.5  MFA for Admin Access       <- No direct evidence file; noted as gap
 CIS 7.3  Patch Management           <- 16_cis_installed_hotfixes.csv,
                                         16_cis_pending_updates_FLAGGED.csv
 CIS 7.4  Manage EOL Software        <- 16_cis_os_build.txt, 08_installed_software.txt
 CIS 8.2  Collect Audit Logs         <- 02_logon_events.csv (verifies logging active)
+CIS 8.3  Adequate Log Storage       <- 18_cis_audit_log_sizes.json
+CIS 8.4  Time Synchronization       <- 16_cis_ntp_status.txt
+CIS 8.5  Detailed Audit Logs        <- 18_cis_ps_logging.json (PS ScriptBlock/Module logging)
 CIS 8.7  Centralize Log Management  <- Absence of SIEM/central log = gap
-CIS 10.1 Anti-Malware Deployment    <- 13_defender_status.txt, 13_av_products.txt
-CIS 10.2 Anti-Malware Signatures    <- 13_defender_status.txt (definition date)
+CIS 9.1  Supported Browsers         <- cis_ig1_gaps.json BrowserVersions
+CIS 10.1 Anti-Malware Deployment    <- 07_defender_status.json, 07_av_products.json
+CIS 10.2 Anti-Malware Signatures    <- 07_defender_status.json (signature age)
+CIS 10.3 Disable Autorun            <- cis_ig1_gaps.json AutorunDisabled
+CIS 10.4 Scan Removable Media       <- cis_ig1_gaps.json RemovableDriveScan
+CIS 10.7 Behavior-Based Detection   <- 07_defender_status.json, cis_ig1_gaps.json
 CIS 11.1 Data Recovery Process      <- 08_installed_software.txt (backup software present)
 CIS 11.4 Isolated Recovery Data     <- No direct evidence file; noted as gap
 CIS 12.2 Network Infrastructure     <- 07_listening_ports.txt, 17_cis_shares_all.csv,
-                                        13_firewall_status.txt
+                                        07_firewall_profiles.txt
 
 
 ==========================================================================
@@ -420,6 +503,24 @@ CLOUD STORAGE EXFIL INDICATORS (07_dns_cache.txt, browser history):
   = unauthorized cloud drop sites (HIGH-CRITICAL)
   rclone = command-line cloud sync tool, often used for bulk exfil
 
+DEFENDER EXCLUSION ABUSE (07_defender_exclusions.json):
+  Any exclusion path pointing to Temp, AppData, Downloads, or user-writable
+  directories = potential attacker abuse to hide malware (HIGH).
+  Exclusion of entire drives (C:\) = CRITICAL.
+  Any process exclusion for non-Microsoft executables = review needed.
+
+PREFETCH ARTIFACTS (13b_prefetch_FLAGGED.csv):
+  Prefetch proves an executable was run even if the file was later deleted.
+  If attack tools (mimikatz, psexec, rclone, etc.) appear in Prefetch,
+  the machine was compromised regardless of current running state. The
+  LastWriteTime on the .pf file approximates the last execution time.
+
+WMI PERSISTENCE (13c_wmi_persistence.csv):
+  ActiveScriptEventConsumer or CommandLineEventConsumer entries on
+  workstations are almost always malicious. WMI persistence survives
+  reboots and is invisible to most users and many AV products.
+  Any findings here warrant full incident response.
+
 BROWSER HISTORY PATTERNS:
   Multiple signed-in Google accounts (u/0, u/1 in URLs) = normal but
   note which account accesses company resources vs. personal resources
@@ -432,12 +533,6 @@ PST FILE ANALYSIS:
   PST files for OTHER users' mailboxes on the target user's machine = HIGH
   Multiple PST files created at identical timestamps = bulk copy operation
   Large PST files (>500MB) combined with cloud backup tool = exfil risk
-
-JUNE 27 SPECIFIC PATTERN (for GPWC investigation):
-  Look for: IDrive installer download, PST creation timestamps, logon events,
-  task scheduler events, and browser activity on 2025-06-27.
-  The combination of PST bulk creation + IDrive reinstall on the same day
-  with no confirmed IT visit is the core unresolved finding.
 
 
 ==========================================================================
