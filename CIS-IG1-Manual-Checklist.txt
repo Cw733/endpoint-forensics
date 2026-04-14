@@ -1,0 +1,387 @@
+============================================================
+  CIS IG1 MANUAL ASSESSMENT CHECKLIST
+  For items that cannot be evaluated by Collect.ps1
+============================================================
+
+PURPOSE
+  Collect.ps1 covers all technical/measurable CIS IG1 safeguards at the
+  endpoint level. The items in this checklist require interviews, document
+  review, or access to systems outside the endpoint (identity provider,
+  firewall, backup platform). Work through this checklist on-site with the
+  owner or IT contact.
+
+SCORING
+  For each item mark one of:
+    PASS     - Control is in place and functioning
+    FAIL     - Control is absent or clearly not functioning
+    PARTIAL  - Partially in place; gaps noted
+    N/A      - Not applicable to this environment
+    UNKNOWN  - Could not determine during this visit
+
+============================================================
+  SECTION A: ASSET MANAGEMENT
+  CIS Controls 1-2
+============================================================
+
+[ ] CIS 1.1 -- Enterprise Asset Inventory
+    Is there a documented list of all hardware assets (PCs, servers,
+    network devices, printers, IoT)?
+    Status: ________
+    Notes: ________________________________________________
+
+[ ] CIS 1.2 -- Address Unauthorized Assets
+    Is there a process to identify and respond to devices that appear
+    on the network that are not on the inventory?
+    (e.g., NAC, DHCP reservations, periodic reviews)
+    Status: ________
+    Notes: ________________________________________________
+
+[ ] CIS 2.3 -- Address Unauthorized Software
+    Is there a process to review installed software and remove
+    unauthorized applications? Is there an approved software list?
+    Status: ________
+    Notes: ________________________________________________
+
+
+============================================================
+  SECTION B: DATA PROTECTION
+  CIS Control 3
+============================================================
+
+[ ] CIS 3.1 -- Data Management Process
+    Is there a documented policy identifying what data the organization
+    collects, where it is stored, and who is responsible for it?
+    Status: ________
+    Notes: ________________________________________________
+
+[ ] CIS 3.2 -- Data Inventory
+    Is there an inventory of sensitive data (financial records, customer
+    data, employee PII) noting where each type is stored?
+    Status: ________
+    Notes: ________________________________________________
+
+[ ] CIS 3.4 -- Data Retention Policy
+    Is there a documented data retention schedule? Are old records
+    purged on a defined schedule?
+    Status: ________
+    Notes: ________________________________________________
+
+[ ] CIS 3.11 -- Encrypt Sensitive Data at Rest
+    NOTE: Collect.ps1 checks BitLocker on endpoint drives.
+    Also verify: are file servers, NAS devices, and backup media encrypted?
+    Status: ________
+    Notes: ________________________________________________
+
+
+============================================================
+  SECTION C: ACCESS CONTROL AND MFA
+  CIS Controls 5-6
+============================================================
+
+[ ] CIS 6.1 -- Access Granting Process
+    Is there a formal process (even informal/documented) for granting
+    new employees access to systems? Is access provisioned based on
+    job role?
+    Status: ________
+    Notes: ________________________________________________
+
+[ ] CIS 6.2 -- Access Revoking Process
+    When an employee leaves or changes roles, is there a defined process
+    to revoke or adjust their access promptly?
+    Ask: How was lcoggins' access removed when she left?
+    Status: ________
+    Notes: ________________________________________________
+
+[ ] CIS 6.3 -- MFA for Externally-Exposed Applications
+    Are any applications accessible from the internet (webmail, VPN portal,
+    accounting software, banking) protected by multi-factor authentication?
+    List apps and MFA status:
+      App: ________________  MFA: [ ] Yes  [ ] No
+      App: ________________  MFA: [ ] Yes  [ ] No
+      App: ________________  MFA: [ ] Yes  [ ] No
+    Status: ________
+
+[ ] CIS 6.4 -- MFA for Remote Network Access
+    Is VPN or RDP access to the network protected by MFA?
+    (Fortinet SSL-VPN supports MFA via FortiToken or RADIUS)
+    Status: ________
+    Notes: ________________________________________________
+
+[ ] CIS 6.5 -- MFA for Administrative Access
+    Do administrator accounts on workstations, servers, and network
+    devices require MFA to authenticate?
+    Status: ________
+    Notes: ________________________________________________
+
+
+============================================================
+  SECTION D: VULNERABILITY MANAGEMENT (PROCESS)
+  CIS Control 7
+============================================================
+
+NOTE: Collect.ps1 checks patch levels and pending updates on each endpoint.
+These items cover the surrounding process.
+
+[ ] CIS 7.1 -- Vulnerability Management Process
+    Is there a defined process for identifying, prioritizing, and
+    remediating vulnerabilities? Even if informal, is patching done
+    on a regular schedule?
+    Status: ________
+    Notes: ________________________________________________
+
+[ ] CIS 7.2 -- Remediation Process
+    When a vulnerability is identified, who is responsible for
+    remediating it and within what timeframe?
+    Status: ________
+    Notes: ________________________________________________
+
+[ ] CIS 7.4 -- Application Patch Management
+    Are third-party applications (Chrome, Office, Adobe, Java) kept
+    updated, or only Windows Updates?
+    Status: ________
+    Notes: ________________________________________________
+
+
+============================================================
+  SECTION E: AUDIT LOG MANAGEMENT
+  CIS Control 8
+============================================================
+
+NOTE: Collect.ps1 confirms event logging is active on each endpoint and
+collects recent logs. These items address the broader log management posture.
+
+[ ] CIS 8.1 -- Audit Log Management Process
+    Is there a policy defining what is logged, how long logs are retained,
+    and who reviews them?
+    Status: ________
+    Notes: ________________________________________________
+
+[ ] CIS 8.3 -- Adequate Audit Log Storage
+    Are logs retained long enough to support incident investigation?
+    (Recommended minimum: 90 days online, 1 year archived)
+    Current retention on firewall: _______ days
+    Current retention on endpoints: _______ days (check event log settings)
+    Status: ________
+
+[ ] CIS 8.7 -- Centralize Log Management
+    Are logs from all endpoints and network devices forwarded to a central
+    location (SIEM, syslog server, FortiAnalyzer, cloud log service)?
+    Status: ________
+    Notes: ________________________________________________
+
+
+============================================================
+  SECTION F: WEB BROWSER AND EMAIL PROTECTIONS
+  CIS Control 9
+============================================================
+
+NOTE: Collect.ps1 checks browser versions on each endpoint.
+These items cover network-level and policy controls.
+
+[ ] CIS 9.2 -- DNS Filtering
+    Is a DNS filtering service in use to block access to known malicious
+    domains? (e.g., Fortinet DNS Filter, Cisco Umbrella, Cloudflare Gateway)
+    Status: ________
+    Notes: ________________________________________________
+
+[ ] CIS 9.3 -- URL Filtering
+    Does the firewall perform URL/web category filtering to block
+    inappropriate or malicious content?
+    Check: Fortinet Web Filter policy -- is it enabled and enforced?
+    Status: ________
+    Notes: ________________________________________________
+
+[ ] CIS 9.4 -- Restrict Browser Extensions
+    Is there a policy or technical control limiting which browser
+    extensions users can install?
+    Status: ________
+    Notes: ________________________________________________
+
+
+============================================================
+  SECTION G: MALWARE DEFENSES (PROCESS/POLICY)
+  CIS Control 10
+============================================================
+
+NOTE: Collect.ps1 checks Defender deployment, real-time status, definition
+age, and autorun policy on each endpoint.
+
+[ ] CIS 10.4 -- Scan Removable Media
+    Is anti-malware configured to automatically scan USB drives and other
+    removable media when connected?
+    (Defender does this by default; verify it has not been disabled)
+    Status: ________
+    Notes: ________________________________________________
+
+[ ] CIS 10.6 -- Centrally Manage Anti-Malware
+    Is anti-malware centrally managed and monitored, or is each machine
+    running independently?
+    (Recommended: Microsoft Defender for Business, or Defender for
+     Endpoint via M365 Business Premium)
+    Status: ________
+    Notes: ________________________________________________
+
+
+============================================================
+  SECTION H: DATA RECOVERY
+  CIS Control 11
+============================================================
+
+[ ] CIS 11.1 -- Data Recovery Process
+    Is there a documented backup and recovery process? Does someone
+    know how to restore from backup if needed?
+    Status: ________
+    Notes: ________________________________________________
+
+[ ] CIS 11.2 -- Automated Backups
+    Are backups automated and running on a schedule?
+    Backup software found on endpoints: _____________________
+    Backup destination (local/offsite/cloud): _______________
+    Last confirmed backup date: _____________________________
+    Status: ________
+
+[ ] CIS 11.3 -- Protect Recovery Data
+    Is backup data protected from unauthorized access or deletion?
+    (e.g., backup account separate from daily-use account, offsite copy,
+    cloud backup with separate credentials)
+    Status: ________
+    Notes: ________________________________________________
+
+[ ] CIS 11.4 -- Isolated Recovery Data Instance
+    Is at least one backup copy stored somewhere that a ransomware
+    infection on the network could not reach?
+    (e.g., offline drive, cloud backup with immutability, air-gapped copy)
+    Status: ________
+    Notes: ________________________________________________
+
+
+============================================================
+  SECTION I: NETWORK INFRASTRUCTURE
+  CIS Control 12
+============================================================
+
+NOTE: Collect.ps1 checks host firewall, RDP, and SMB shares on each
+endpoint. These items require access to the Fortinet firewall.
+Reference: E:\Fortinet-Export-Checklist.txt for what to pull.
+
+[ ] CIS 12.1 -- Network Infrastructure Up-to-Date
+    Is the Fortinet firewall running a supported firmware version?
+    Current firmware: _______________________
+    Check: support.fortinet.com for EOL status
+    Status: ________
+
+[ ] CIS 12.2 -- Secure Network Architecture
+    Is the network segmented appropriately?
+    (e.g., guest WiFi separate from corporate, OT/SCADA on separate VLAN,
+    public workstations separate from accounting systems)
+    Status: ________
+    Notes: ________________________________________________
+
+[ ] CIS 12.3 -- Secure Network Management
+    Is management access to the Fortinet (web UI, SSH) restricted to
+    specific trusted IPs or management interfaces?
+    Is default admin account renamed or disabled?
+    Status: ________
+    Notes: ________________________________________________
+
+[ ] CIS 12.4 -- Network Architecture Documentation
+    Is there a network diagram showing devices, VLANs, and traffic flow?
+    Status: ________
+    Notes: ________________________________________________
+
+[ ] CIS 12.5 -- Centralized Authentication (AAA)
+    Are network devices and systems authenticating users against a
+    central directory (Active Directory, Azure AD, LDAP)?
+    Or is each system managing its own local user list?
+    Status: ________
+    Notes: ________________________________________________
+
+
+============================================================
+  SECTION J: SECURITY MONITORING
+  CIS Control 13
+============================================================
+
+[ ] CIS 13.1 -- Centralize Security Event Alerting
+    Is there any alerting in place for security events?
+    (e.g., Defender alerts, firewall IPS alerts, email on failed logins)
+    Status: ________
+    Notes: ________________________________________________
+
+[ ] CIS 13.2 -- Host-Based Intrusion Detection
+    Is there host-based intrusion detection or EDR beyond basic AV?
+    (e.g., Microsoft Defender for Endpoint, CrowdStrike, SentinelOne)
+    Status: ________
+    Notes: ________________________________________________
+
+
+============================================================
+  SECTION K: SECURITY AWARENESS TRAINING
+  CIS Control 14
+============================================================
+
+[ ] CIS 14.1 -- Security Awareness Program
+    Is there any security awareness training for employees?
+    (Even annual reminders about phishing count as a starting point)
+    Status: ________
+    Notes: ________________________________________________
+
+[ ] CIS 14.2 -- Phishing Training
+    Have employees received training on identifying phishing emails?
+    Has a phishing simulation ever been run?
+    Status: ________
+    Notes: ________________________________________________
+
+[ ] CIS 14.6 -- Social Engineering Training
+    Are employees aware of social engineering tactics like phone-based
+    impersonation of IT support?
+    Status: ________
+    Notes: ________________________________________________
+
+
+============================================================
+  SECTION L: INCIDENT RESPONSE
+  CIS Control 17
+============================================================
+
+[ ] CIS 17.1 -- Incident Response Plan
+    Does the organization have a written incident response plan?
+    (What to do if ransomware hits, if a laptop is stolen, if an
+    employee is suspected of data theft)
+    Status: ________
+    Notes: ________________________________________________
+
+[ ] CIS 17.2 -- Incident Response Roles
+    Does someone know who to call first if an incident occurs?
+    IT contact: ________________________
+    Legal/HR contact: __________________
+    Law enforcement threshold defined: [ ] Yes  [ ] No
+    Status: ________
+
+
+============================================================
+  SUMMARY SCORECARD
+============================================================
+
+Fill in after completing all sections.
+
+  Section A - Asset Management          PASS / FAIL / PARTIAL
+  Section B - Data Protection           PASS / FAIL / PARTIAL
+  Section C - Access Control / MFA      PASS / FAIL / PARTIAL
+  Section D - Vulnerability Management  PASS / FAIL / PARTIAL
+  Section E - Audit Log Management      PASS / FAIL / PARTIAL
+  Section F - Browser / Email           PASS / FAIL / PARTIAL
+  Section G - Malware Defenses          PASS / FAIL / PARTIAL
+  Section H - Data Recovery             PASS / FAIL / PARTIAL
+  Section I - Network Infrastructure    PASS / FAIL / PARTIAL
+  Section J - Security Monitoring       PASS / FAIL / PARTIAL
+  Section K - Security Awareness        PASS / FAIL / PARTIAL
+  Section L - Incident Response         PASS / FAIL / PARTIAL
+
+  Total FAIL + PARTIAL items: ________
+
+NOTE: Feed this completed checklist to the AI along with the Collect.ps1
+evidence folder to generate a unified CIS IG1 gap report incorporating
+both automated and manual findings.
+
+============================================================
