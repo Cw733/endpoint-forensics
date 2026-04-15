@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Parse a FortiGate configuration backup for CIS IG1 compliance assessment.
@@ -438,11 +438,11 @@ $mfaAdmins      = $adminAccounts | Where-Object { $_.TwoFactor -ne 'disable' }
 
 $cisIG1.DefaultAdminAccountExists = [bool]$defaultAdmin
 $cisIG1.AdminTrustedHostsSet      = ($noTrustedHosts.Count -eq 0)
-$cisIG1.Admin_MFA_Enabled         = ($mfaAdmins.Count -gt 0)
+$cisIG1.Admin_MFA_Enabled         = (@($mfaAdmins).Count -gt 0)
 
 if ($defaultAdmin)              { $indicators.DefaultAdminAccount = $true; Write-Flag "Default 'admin' account still exists -- should be renamed or disabled" }
-if ($noTrustedHosts.Count -gt 0) { $indicators.AdminNoTrustedHosts = $true; Write-Flag "$($noTrustedHosts.Count) admin account(s) have no trusted host restriction (accessible from anywhere)" }
-if ($mfaAdmins.Count -eq 0)    { $indicators.NoMFA_Admin = $true; Write-Flag "No admin accounts have MFA (FortiToken/email 2FA) enabled" }
+if (@($noTrustedHosts).Count -gt 0) { $indicators.AdminNoTrustedHosts = $true; Write-Flag "$(@($noTrustedHosts).Count) admin account(s) have no trusted host restriction (accessible from anywhere)" }
+if (@($mfaAdmins).Count -eq 0) { $indicators.NoMFA_Admin = $true; Write-Flag "No admin accounts have MFA (FortiToken/email 2FA) enabled" }
 
 Save-Json (Join-Path $OutputPath "02_fg_admin_accounts.json") $adminAccounts
 
@@ -640,10 +640,10 @@ if ($flaggedPolicies.Count -gt 0) {
 }
 
 # Profile coverage across active ACCEPT policies
-$withAV        = ($activePolicies | Where-Object { $_.AVProfile  -ne '' }).Count
-$withIPS       = ($activePolicies | Where-Object { $_.IPSSensor  -ne '' }).Count
-$withWebFilter = ($activePolicies | Where-Object { $_.WebFilter  -ne '' }).Count
-$withDNSFilter = ($activePolicies | Where-Object { $_.DNSFilter  -ne '' }).Count
+$withAV        = @($activePolicies | Where-Object { $_.AVProfile  -ne '' }).Count
+$withIPS       = @($activePolicies | Where-Object { $_.IPSSensor  -ne '' }).Count
+$withWebFilter = @($activePolicies | Where-Object { $_.WebFilter  -ne '' }).Count
+$withDNSFilter = @($activePolicies | Where-Object { $_.DNSFilter  -ne '' }).Count
 
 Write-Host "    $($activePolicies.Count) active ACCEPT policies -- AV:$withAV  IPS:$withIPS  WebFilter:$withWebFilter  DNSFilter:$withDNSFilter" -ForegroundColor DarkGray
 
