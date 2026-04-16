@@ -2,13 +2,33 @@
 Set-ExecutionPolicy -Scope Process Bypass
 
 # Run evidence collection (outputs next to script)
-.\Collect-Evidence.ps1
+.\Collect.ps1
 
 # Target a specific user
-.\Collect-Evidence.ps1 -TargetUser "username"
+.\Collect.ps1 -TargetUser "username"
 
-# Specify output path
-.\Collect-Evidence.ps1 -OutputRoot "E:\Audits"
+# Specify output path (e.g., external drive)
+.\Collect.ps1 -OutputRoot "E:\Audits"
+
+# Include network scan of all hosts on the LAN
+.\Collect.ps1 -NetworkScan
 
 # Run targeted investigation script
 powershell -ExecutionPolicy Bypass -File .\Targeted-Investigation.ps1
+
+# ---- REPORT CONVERSION ----
+
+# Install Pandoc (run once):
+winget install --id JohnMacFarlane.Pandoc
+
+# After install, refresh PATH in current session:
+$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+
+# Convert markdown report to .docx (recommended):
+.\convert-report.ps1 -InputMd ".\report.md" -ReferenceDoc ".\reference-style.docx"
+
+# With explicit output path:
+.\convert-report.ps1 -InputMd ".\report.md" -ReferenceDoc ".\ref.docx" -OutputDocx ".\report-final.docx"
+
+# Run Pandoc directly (no post-processing):
+pandoc "report.md" --from markdown --to docx --reference-doc "ref.docx" --toc --toc-depth=3 --output "report.docx"
