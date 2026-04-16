@@ -7,10 +7,25 @@ Windows endpoint forensics and security audit toolkit for small-to-medium enviro
 | File | Description |
 |------|-------------|
 | `Collect.ps1` | Comprehensive endpoint evidence collector with CIS IG1 compliance checks. Gathers system info, logon events, processes, services, scheduled tasks, network state, Defender status/exclusions, browser history, USB history, Prefetch artifacts, WMI persistence, webcam access logs, and full CIS IG1 gap analysis. Outputs public IP for external scanning. Run as Administrator. |
-| `Analysis-Prompt.txt` | AI analysis prompt for use with GitHub Copilot CLI or any capable AI assistant. Feed this file along with your evidence folder path to generate a standardized security audit report with CIS IG1 compliance table, or a user-specific investigation report. |
+| `convert-report.ps1` | Converts a markdown security assessment report to .docx. Runs Pandoc for the conversion, then applies Word COM post-processing: table borders, heading size/spacing/AllCaps, and gray italic disclaimer styling. Requires Pandoc and Microsoft Word. |
+| `Analysis-Prompt.txt` | AI analysis prompt for use with GitHub Copilot CLI or any capable AI assistant. Feed this file along with your evidence folder path to generate a standardized security audit report with CIS IG1 compliance table, or a user-specific investigation report. Includes document generation instructions and formatting rules. |
 | `CIS-IG1-Manual-Checklist.txt` | CIS Controls IG1 manual assessment checklist for items requiring interviews, document review, or access to non-endpoint systems (identity provider, firewall, backup platform). |
 | `FortiGate-Export-Checklist.txt` | On-site Fortinet FortiGate export checklist. Covers configuration backup, event logs, traffic logs, security logs, firewall policy review, VPN configuration, admin accounts, and log retention. |
-| `commands.txt` | Quick-reference commands for running the collection scripts. |
+| `commands.txt` | Quick-reference commands for running the collection and conversion scripts. |
+
+## Prerequisites
+
+- **Windows** with PowerShell 5.1 or newer
+- **Administrator access** on the target machine (for evidence collection)
+- **Microsoft Word** installed (required for `convert-report.ps1` post-processing)
+- **Pandoc** for .docx report generation:
+  ```
+  winget install --id JohnMacFarlane.Pandoc
+  ```
+  After installation, refresh PATH in the current PowerShell session before use:
+  ```powershell
+  $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+  ```
 
 ## CIS IG1 Coverage
 
@@ -83,9 +98,34 @@ Review all files with `_FLAGGED`, `_SUSPICIOUS`, or `_UNEXPECTED` suffixes as pr
 2. Feed it `Analysis-Prompt.txt` as context
 3. Say: `"I have an evidence folder from Collect.ps1 at [path]. Generate a security audit report following the instructions in the prompt file."`
 4. For an investigation report: `"Also generate an investigation findings report for user [username]."`
-5. The AI will generate a report with a full CIS IG1 compliance table aligned to CIS control numbers.
+5. The AI will read the evidence files and produce a report with a full CIS IG1 compliance table.
 
 Browser history `.db` files (SQLite) can be opened with [DB Browser for SQLite](https://sqlitebrowser.org).
+
+### Converting Reports to Word
+
+After generating your markdown report, convert to .docx with `convert-report.ps1`:
+
+```powershell
+# Install Pandoc first (one-time):
+winget install --id JohnMacFarlane.Pandoc
+
+# Then convert (refresh PATH if needed first):
+.\convert-report.ps1 -InputMd ".\report.md" -ReferenceDoc ".\reference-style.docx"
+
+# With explicit output path:
+.\convert-report.ps1 -InputMd ".\report.md" -ReferenceDoc ".\ref.docx" -OutputDocx ".\report-final.docx"
+```
+
+A **reference-style.docx** is required for consistent heading and body styles. Create one by
+running Pandoc on a minimal markdown file, adjusting heading styles in Word, and saving it as
+your style template. Store it alongside this toolkit.
+
+The script applies these post-processing steps automatically:
+- Table borders (inside and outside)
+- Heading AllCaps + increased font size (H1: 22pt, H2: 16pt, H3: 13pt)
+- Heading SpaceBefore/SpaceAfter for visual section separation
+- Gray italic styling for blockquote/disclaimer text
 
 ### FortiGate Audit
 
