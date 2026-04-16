@@ -1,4 +1,3 @@
-==========================================================================
   COLLECT-EVIDENCE.PS1 — ANALYSIS AND REPORT GENERATION INSTRUCTIONS
   For use with GitHub Copilot CLI or any capable AI assistant
 ==========================================================================
@@ -288,7 +287,7 @@ STEP 9 -- SHARES AND DATA EXPOSURE
 
 Generate the security audit report in this exact format. The report covers
 infrastructure/configuration findings only -- no individual user accusations.
-Save as both .html and .docx (use Word COM automation for .docx conversion).
+Save the final report as .md (source of truth) and .docx (via Pandoc + Word COM post-processing).
 
 --------------------------------------------------------------------------
 REPORT STRUCTURE:
@@ -385,6 +384,123 @@ TONE AND STYLE:
   was found on these specific machines
 - Remove all markdown formatting from the Word version
 
+
+
+
+--------------------------------------------------------------------------
+DOCUMENT GENERATION:
+--------------------------------------------------------------------------
+
+Use Pandoc to convert the markdown report to .docx. Do NOT use custom
+PowerShell Word COM scripts for the conversion itself -- they are fragile
+on complex/large documents. Use Word COM only for the post-processing pass.
+
+Install Pandoc once (if not present):
+  winget install --id JohnMacFarlane.Pandoc
+
+In a new PowerShell session after install, refresh PATH first:
+  $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
+              [System.Environment]::GetEnvironmentVariable("Path","User")
+
+Conversion command:
+  pandoc "report.md" --from markdown --to docx `
+    --reference-doc "reference-style.docx" --toc --toc-depth=3 `
+    --output "report.docx"
+
+The --reference-doc is a .docx with pre-configured heading and body styles.
+Store a clean style template alongside this toolkit. Generate by running Pandoc
+on minimal markdown, adjust styles in Word, save as the template.
+
+Alternatively, use convert-report.ps1 (included in this toolkit):
+  .\convert-report.ps1 -InputMd ".\report.md" -ReferenceDoc ".\reference-style.docx"
+
+WORD COM POST-PROCESSING (run after every Pandoc conversion):
+Applies table borders, heading size/spacing/AllCaps, and gray italic blockquote
+styling. The Pandoc output alone does not include these formatting elements.
+
+  $word = New-Object -ComObject Word.Application
+  $word.Visible = $false
+  $doc = $word.Documents.Open("C:\full\path\to\report.docx")
+
+  foreach ($tbl in $doc.Tables) {
+      $tbl.Borders.InsideLineStyle = 1
+      $tbl.Borders.OutsideLineStyle = 1
+      $tbl.Borders.OutsideLineWidth = 4
+      $tbl.Borders.InsideLineWidth = 2
+  }
+
+  foreach ($para in $doc.Paragraphs) {
+      switch -Wildcard ($para.Style.NameLocal) {
+          "Heading 1" {
+              $para.Format.SpaceBefore = 30; $para.Format.SpaceAfter = 8
+              $para.Range.Font.Size = 22; $para.Range.Font.AllCaps = $true }
+          "Heading 2" {
+              $para.Format.SpaceBefore = 28; $para.Format.SpaceAfter = 6
+              $para.Range.Font.Size = 16; $para.Range.Font.AllCaps = $true }
+          "Heading 3" {
+              $para.Format.SpaceBefore = 16; $para.Format.SpaceAfter = 4
+              $para.Range.Font.Size = 13 }
+          "Heading 4" { $para.Format.SpaceBefore = 10; $para.Format.SpaceAfter = 3 }
+          "*Block Text*" {
+              $para.Range.Font.Color = 0xAAAAAA   # Light gray (R=G=B=170)
+              $para.Range.Font.Size = 10; $para.Range.Font.Italic = $true }
+          "*Quote*" {
+              $para.Range.Font.Color = 0xAAAAAA
+              $para.Range.Font.Size = 10; $para.Range.Font.Italic = $true }
+      }
+  }
+
+  $doc.Save(); $doc.Close(); $word.Quit()
+  [System.Runtime.InteropServices.Marshal]::ReleaseComObject($word) | Out-Null
+
+
+--------------------------------------------------------------------------
+FORMATTING RULES:
+--------------------------------------------------------------------------
+
+1. NO SECTION NUMBERS in headings. Use descriptive heading text only.
+   WRONG: "4. CIS IG1 Compliance Assessment" or "4.1 Firewall Review"
+   RIGHT:  "CIS IG1 Compliance Assessment" or "Firewall Review"
+   Reason: CIS IG1 uses X.X control numbering; numeric section headings
+   create visual confusion when both appear in the same document.
+
+2. FINDINGS GRID: Sort rows by severity descending.
+   CRITICAL first, then HIGH, then MEDIUM, then LOW/INFORMATIONAL.
+   Do not interleave severities. Number rows F-1, F-2... in that order.
+
+3. CIS IG1 COVERAGE -- all 56 IG1 safeguards must be accounted for:
+   a) N/A controls (e.g., CIS Control 16 for orgs with no software dev):
+      Add a "Controls Not Applicable" table at the top of the CIS section
+      with control numbers and a one-sentence justification for each.
+   b) In-scope controls not assessable from endpoint/scan data alone
+      (backup verification, MFA config, training records, documented
+      processes): add a footnote after the CIS summary table listing
+      safeguard numbers and why each requires manual/documentation review.
+   Goal: the report must not appear to have omitted or forgotten any controls.
+
+4. DISCLAIMER / LEGAL NOTICE: Place at the very end of the document after
+   all appendices. Use markdown blockquote syntax (> text) so it renders
+   as gray italic text after Word COM post-processing.
+
+5. NO HORIZONTAL RULES (---) between sections. They render as dated
+   page-width lines in Word. Section separation comes from heading AllCaps,
+   increased font size, and SpaceBefore/SpaceAfter paragraph spacing.
+   Strip all standalone --- lines from the markdown before conversion.
+
+6. TABLE OF CONTENTS: Use Pandoc --toc flag (auto-generated from headings).
+   Do not write a manual TOC in the markdown -- it will diverge over time.
+
+7. RECOMMENDED SECTION ORDER:
+   - Executive Summary
+   - Scope and Methodology
+   - Critical Findings  (brief -- top 3-5 most severe items only)
+   - Detailed Technical Findings  (by device/system)
+   - User Account Activity Review  (if applicable)
+   - Threat Sweep Results  (if applicable)
+   - CIS IG1 Compliance Assessment
+   - Prioritized Remediation Roadmap
+   - Appendix
+   - [Disclaimer / Legal Notice in blockquote at very end]
 
 ==========================================================================
   PART 4: INVESTIGATION REPORT FORMAT (user-specific findings)
