@@ -1203,31 +1203,48 @@ if ($disabledProfiles) {
     $script:indicators.FirewallDisabledProfiles = @($disabledProfiles.Name)
 }
 
-# Firewall rules that allow all inbound traffic (Action=Allow, Direction=Inbound, no remote address filter)
-try {
-    $fwRules = @(Get-NetFirewallRule -Direction Inbound -Action Allow -Enabled True -ErrorAction Stop |
-        Where-Object { $_.Profile -notmatch 'Domain' })
-    Log "  Inbound allow rules (non-Domain): $($fwRules.Count)"
-    # Build lookup tables in bulk instead of per-rule queries (avoids WMI exhaustion)
-    $appFilters  = @{}; Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue |
-        ForEach-Object { $appFilters[$_.InstanceID] = $_.Program }
-    $portFilters = @{}; Get-NetFirewallPortFilter -ErrorAction SilentlyContinue |
-        ForEach-Object { $portFilters[$_.InstanceID] = $_.LocalPort }
-    $suspiciousFWRules = $fwRules | Select-Object DisplayName, Direction, Action, Profile, Enabled,
-        @{N="Program";  E={ $appFilters[$_.InstanceID] }},
-        @{N="LocalPort"; E={ $portFilters[$_.InstanceID] }}
-    Save "07_firewall_inbound_allow_rules.txt" ($suspiciousFWRules | Format-Table -AutoSize | Out-String)
-    # Flag rules allowing Any port from Any remote address
-    $broadFWRules = $suspiciousFWRules | Where-Object {
-        $_.LocalPort -in @("Any","*","0-65535") -or -not $_.LocalPort
+# Firewall rules — runs in Invoke-Skippable because bulk filter queries can be slow on domain machines
+$_fwStatusFile = [IO.Path]::GetTempFileName()
+Invoke-Skippable -Label "firewall inbound-allow rule scan" -StatusFile $_fwStatusFile -Action {
+    param($out, $statusFile)
+    try {
+        "Enumerating inbound allow rules..." | Set-Content $statusFile
+        $fwRules = @(Get-NetFirewallRule -Direction Inbound -Action Allow -Enabled True -ErrorAction Stop |
+            Where-Object { $_.Profile -notmatch 'Domain' })
+        "$($fwRules.Count) rules found, building filter lookups..." | Set-Content $statusFile
+        # Build lookup tables in bulk instead of per-rule queries (avoids WMI exhaustion)
+        $appFilters  = @{}; Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue |
+            ForEach-Object { $appFilters[$_.InstanceID] = $_.Program }
+        $portFilters = @{}; Get-NetFirewallPortFilter -ErrorAction SilentlyContinue |
+            ForEach-Object { $portFilters[$_.InstanceID] = $_.LocalPort }
+        $enriched = $fwRules | Select-Object DisplayName, Direction, Action, Profile, Enabled,
+            @{N="Program";  E={ $appFilters[$_.InstanceID] }},
+            @{N="LocalPort"; E={ $portFilters[$_.InstanceID] }}
+        $enriched | Format-Table -AutoSize | Out-String |
+            Set-Content "$out\07_firewall_inbound_allow_rules.txt" -Encoding UTF8
+        # Flag rules allowing Any port from Any remote address
+        $broad = $enriched | Where-Object {
+            $_.LocalPort -in @("Any","*","0-65535") -or -not $_.LocalPort
+        }
+        if ($broad) {
+            $broad | Format-Table -AutoSize | Out-String |
+                Set-Content "$out\07_firewall_broad_rules_FLAGGED.txt" -Encoding UTF8
+        }
+        $broadCount = if ($broad) { @($broad).Count } else { 0 }
+        "$($fwRules.Count) rules, $broadCount broad" | Set-Content $statusFile
+    } catch {
+        "Could not enumerate firewall rules: $_" |
+            Set-Content "$out\07_firewall_inbound_allow_rules.txt" -Encoding UTF8
+        "FAILED: $_" | Set-Content $statusFile
     }
-    if ($broadFWRules) {
-        Save "07_firewall_broad_rules_FLAGGED.txt" ($broadFWRules | Format-Table -AutoSize | Out-String)
-        Log "  *** Broad inbound firewall allow-rules found -- see 07_firewall_broad_rules_FLAGGED.txt ***" "Yellow"
-    }
-} catch {
-    Log "  WARNING: Firewall rule enumeration failed: $_" "Yellow"
-    Save "07_firewall_inbound_allow_rules.txt" "Could not enumerate firewall rules: $_"
+} -ArgumentList $OutputPath, $_fwStatusFile
+
+# Log results from the skippable job
+if (Test-Path "$OutputPath\07_firewall_inbound_allow_rules.txt") {
+    Log "  Saved: 07_firewall_inbound_allow_rules.txt"
+}
+if (Test-Path "$OutputPath\07_firewall_broad_rules_FLAGGED.txt") {
+    Log "  *** Broad inbound firewall allow-rules found -- see 07_firewall_broad_rules_FLAGGED.txt ***" "Yellow"
 }
 
 # -- Proxy settings (system-wide and per-user WinINET) --------------------
