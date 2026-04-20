@@ -698,8 +698,13 @@ Save "01_bios.txt"        (Get-WmiObject Win32_BIOS | Format-List * | Out-String
 Save "01_local_users.txt" (Get-LocalUser | Format-Table Name, Enabled, LastLogon, PasswordLastSet, Description -AutoSize | Out-String)
 Save "01_local_groups.txt"(Get-LocalGroup | Format-Table * -AutoSize | Out-String)
 Save "01_group_members_admins.txt" (
-    & { try { Get-LocalGroupMember -Group "Administrators" | Format-Table * -AutoSize | Out-String }
-        catch { "Error: $_" } }
+    & { try {
+        Get-LocalGroupMember -Group "Administrators" -ErrorAction Stop | Format-Table * -AutoSize | Out-String
+    } catch {
+        # Error 1789 is common on domain-joined machines with stale trust relationships
+        Log "  Get-LocalGroupMember failed (error 1789 on domain machines is normal) -- falling back to net localgroup" "DarkGray"
+        (net localgroup Administrators 2>&1) | Out-String
+    } }
 )
 
 # -- Hardware security baseline (CIS 1.1) --
@@ -2294,7 +2299,23 @@ foreach ($grp in $privGroups) {
                 ObjectClass    = $_.ObjectClass
             }
         }
-    } catch {}
+    } catch {
+        # Fallback: parse net localgroup output (works when cmdlet fails on domain machines)
+        $netOut = net localgroup $grp 2>&1
+        $inMembers = $false
+        foreach ($line in $netOut) {
+            if ($line -match '^-{3,}') { $inMembers = $true; continue }
+            if ($line -match '^The command completed' -or [string]::IsNullOrWhiteSpace($line)) { $inMembers = $false; continue }
+            if ($inMembers) {
+                $privReport += [PSCustomObject]@{
+                    Group           = $grp
+                    Name            = $line.Trim()
+                    PrincipalSource = "net localgroup (fallback)"
+                    ObjectClass     = "Unknown"
+                }
+            }
+        }
+    }
 }
 if ($privReport) {
     $privReport | Export-Csv "$OutputPath\15_cis_privileged_group_members.csv" -NoTypeInformation
