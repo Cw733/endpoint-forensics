@@ -42,6 +42,9 @@ SECTION 01 -- SYSTEM INFORMATION
                                  password last set
   01_local_groups.txt         -- All local groups
   01_group_members_admins.txt -- Members of local Administrators group
+  01_bios_tpm.json            -- BIOS info, TPM status, Secure Boot (CIS 1.1)
+  01_gpo_rsop.txt             -- gpresult /r output (GPO resultant set)
+  01_windows_features.txt     -- Enabled Windows features (check for PSv2, SMBv1)
 
 SECTION 02 -- LOGON EVENTS (last 30 days)
   02_logon_events.csv         -- Columns: Time, EventID, Meaning, User,
@@ -61,6 +64,8 @@ SECTION 04 -- SERVICES
   04_services_running.txt     -- Running services with paths and run-as accounts
   04_services_SUSPICIOUS.txt  -- Services running from AppData/Temp/non-standard
                                  paths (if exists, HIGH priority)
+  04_services_localsystem_LOB.txt -- Non-Windows services running as LocalSystem
+                                 (LOB apps with excessive privilege -- verify need)
 
 SECTION 05 -- SCHEDULED TASKS
   05_scheduled_tasks.txt      -- Active scheduled tasks with actions and triggers
@@ -154,7 +159,8 @@ SECTIONS 15-18 -- CIS IG1 COMPLIANCE
   17_cis_shares_OVERPERMISSIVE_FLAGGED.csv -- Shares with Everyone/Users access (CIS 3.3)
   17_cis_folder_broad_access.csv   -- User profile folders with broad ACLs (CIS 3.3)
   17_cis_bitlocker_status.csv      -- Drive encryption status (CIS 3.6)
-  18_cis_secure_config.json        -- SMBv1, LLMNR, NetBIOS status (CIS 4.1)
+  15_cis_local_security_policy.txt -- secedit export: password/lockout/audit policy
+  18_cis_secure_config.json        -- SMBv1, LLMNR, NetBIOS, SMB signing, LSA, CredGuard (CIS 4.1)
   18_cis_screen_lock.json          -- Screen lock / inactivity timeout (CIS 4.3)
   18_cis_audit_log_sizes.json      -- Event log max sizes and retention (CIS 8.3)
   18_cis_ps_logging.json           -- PowerShell ScriptBlock/Module/Transcription logging (CIS 8.5)
@@ -163,6 +169,7 @@ SUMMARY FILES
   quick_indicators.json       -- Key flags: public IP, RDP, firewall, AV, remote
                                  access software, suspicious process count, webcam hits
   cis_ig1_gaps.json           -- CIS IG1 gap data: all automated compliance checks
+  _evidence_hashes.sha256    -- SHA256 hash manifest for chain of custody
                                  in a single JSON for report generation
   webcam_concern_summary.json -- Webcam-specific indicator summary
 
@@ -209,6 +216,13 @@ STEP 4 -- SECURITY POSTURE
 
   Read 18_cis_secure_config.json. SMBv1 enabled = CRITICAL.
   LLMNR or NetBIOS enabled = MEDIUM-HIGH (credential relay attacks).
+  SMB signing not required = MEDIUM (relay attacks). LSA protection
+  (RunAsPPL) not enabled = MEDIUM (credential theft).
+
+  Read 04_services_localsystem_LOB.txt if it exists. Non-Microsoft services
+  running as LocalSystem = LOW-MEDIUM (excessive privilege, common in SMB).
+  Note: many LOB apps (QuickBooks, POS) legitimately require SYSTEM. Flag
+  but use "commonly runs as SYSTEM" caveat when appropriate.
 
   Read 18_cis_screen_lock.json. No screen lock = MEDIUM.
   Timeout > 15 min = LOW. No password on resume = MEDIUM.
@@ -564,7 +578,8 @@ CIS 1.1  Asset Inventory            <- 00_metadata.txt, 01_systeminfo.txt
 CIS 2.1  Software Inventory         <- 08_installed_software.txt
 CIS 3.3  Data Access Controls       <- 17_cis_shares_*.csv, 17_cis_folder_broad_access.csv
 CIS 3.6  Encrypt End-User Devices   <- 17_cis_bitlocker_status.csv
-CIS 4.1  Secure Configuration       <- 18_cis_secure_config.json (SMBv1, LLMNR, NetBIOS),
+CIS 4.1  Secure Configuration       <- 18_cis_secure_config.json (SMBv1, LLMNR, NetBIOS,
+                                        SMB signing, LSA, CredGuard),
                                         07_firewall_profiles.txt, 07_rdp_settings.json
 CIS 4.2  Maintain Secure Config     <- 06_autoruns_registry.txt, 04_services_SUSPICIOUS.txt
 CIS 4.3  Auto Session Locking       <- 18_cis_screen_lock.json
@@ -701,5 +716,122 @@ Reference the client context throughout to distinguish normal business
 activity from genuinely suspicious findings. Document which findings
 required context to classify (this helps identify gaps in documentation
 and policy at the client site).
+
+==========================================================================
+  PART 8: FACTUAL ACCURACY AND ANTI-HALLUCINATION RULES
+==========================================================================
+
+CRITICAL: These rules override all other instructions when in conflict.
+
+RULE 1 -- EVIDENCE-ONLY ASSERTIONS
+  Every factual claim in the report must be directly traceable to a
+  specific evidence file, configuration line, or scan output. If a claim
+  cannot be verified from the evidence, it MUST NOT appear in the report.
+
+  NEVER infer, assume, guess, or fabricate:
+  - Version numbers, build numbers, or dates not found in evidence
+  - IP addresses, MAC addresses, or hostnames not in evidence
+  - Account names, login dates, or group memberships not in evidence
+  - Configuration values (enabled/disabled/value) not explicitly in config
+  - Software install dates not in evidence files
+  - Service states (running/stopped) not in evidence files
+
+RULE 2 -- DEFAULTS AND ABSENCES
+  When a configuration value is not explicitly set in a config file:
+  - Do NOT state the value as if it were observed
+  - Instead write: "[setting] not explicitly configured (FortiOS default: [value])"
+  - If you are uncertain of the default, state: "[setting] not present in
+    configuration; verify manually"
+  - The absence of a setting is NOT the same as observing it disabled
+
+RULE 3 -- WORDING FOR UNVERIFIABLE CLAIMS
+  If a claim comes from client conversation or on-site observation rather
+  than collected evidence files, use one of:
+  - "Per client report, [claim]" (for verbal/email info from the client)
+  - "Observed during on-site assessment: [claim]" (for in-person findings)
+  - "Not present in collected evidence; requires manual verification"
+  Do NOT present these as machine-verified findings.
+
+RULE 4 -- PROHIBITED PATTERNS
+  The following patterns indicate hallucination and must be avoided:
+  - Stating a specific value from a file you have not read
+  - Copying a value from one device and attributing it to another
+  - Inventing remediation steps for features that are already configured
+  - Reporting a feature as "disabled" when the config actually shows "enable"
+  - Filling in placeholder data with plausible-sounding values
+  - Stating install dates, event dates, or timestamps not in evidence
+
+RULE 5 -- TWO-PASS WORKFLOW
+  After generating the report, perform a second complete pass:
+  1. Re-read EVERY factual claim in the report
+  2. For each claim, identify the exact evidence file and location
+  3. If a claim cannot be sourced, either remove it or add a caveat
+  4. Generate the Citation Verification Table (see Part 9) as proof
+
+RULE 6 -- ERROR ACKNOWLEDGMENT
+  If you discover an error during the verification pass:
+  - Fix the error immediately
+  - Add a note in the Citation Verification Table documenting:
+    a) What was originally stated
+    b) What the evidence actually shows
+    c) What was corrected to
+  Do NOT leave known errors in the report under any circumstances.
+
+
+==========================================================================
+  PART 9: CITATION VERIFICATION TABLE (MANDATORY COMPANION DOCUMENT)
+==========================================================================
+
+Every report MUST be accompanied by a Citation Verification Table saved
+as a separate file alongside the report. This is non-optional.
+
+FILE NAMING:
+  If the report is: ClientName-CIS-IG1-Security-Assessment.md
+  The table is:     ClientName-Citation-Verification.md
+
+PURPOSE:
+  The citation table maps every factual claim in the report to its source
+  evidence file, enabling independent verification. It also serves as a
+  quality control artifact proving the report was fact-checked.
+
+TABLE FORMAT:
+  Each section of the report gets its own table with these columns:
+
+  | # | Claim | Source File | Evidence | Status |
+  |---|-------|-------------|----------|--------|
+
+  Where:
+  - #:          Unique claim identifier (e.g., F1-01, N-03, MO-15)
+  - Claim:      The specific factual assertion from the report
+  - Source File: The exact evidence filename (e.g., 01_local_users.txt)
+  - Evidence:   The specific line, value, or entry that supports the claim
+  - Status:     One of the following:
+      VERIFIED   -- Claim matches evidence exactly
+      CAVEAT     -- Claim is mostly correct but has a nuance (explain)
+      INCORRECT  -- Claim does not match evidence (MUST be corrected)
+      VERBAL     -- Claim comes from client/assessor, not evidence files
+      UNVERIFIED -- No evidence file found to confirm or deny
+
+SUMMARY TABLE:
+  At the end, include a summary:
+
+  | Category | Verified | Caveat | Incorrect | Verbal | Unverified | Total |
+  |----------|----------|--------|-----------|--------|------------|-------|
+
+  The report cannot be delivered if any claims have status = INCORRECT.
+  All INCORRECT items must be fixed before delivery.
+
+WORKFLOW:
+  1. Generate the report following Parts 1-7
+  2. Generate the citation table by re-reading each claim against evidence
+  3. Fix any INCORRECT items found during step 2
+  4. Re-verify the fixed items
+  5. Deliver both the report and the citation table together
+
+IMPORTANT: The citation table is a DELIVERABLE, not a draft artifact.
+It should be professional, organized by report section, and complete.
+If the table shows 100% VERIFIED with zero INCORRECT, it provides
+confidence that the report is factually accurate. Any CAVEAT or
+UNVERIFIED items should be reviewed by the analyst before delivery.
 
 ==========================================================================

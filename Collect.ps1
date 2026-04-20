@@ -249,6 +249,9 @@ $script:cisIG1 = [ordered]@{
     DefenderBehaviorMonitor  = $null  # CIS 10.7 - behavior-based detection enabled
     DefenderExclusions       = @()    # Defender exclusion paths (attacker abuse)
     RemovableDriveScan       = $null  # CIS 10.4 - Defender scans removable media
+    SMBSigningRequired       = $null  # CIS 4.1 - SMB signing required
+    LSAProtection            = $null  # CIS 4.1 - LSA RunAsPPL enabled
+    CredentialGuard          = $null  # CIS 4.1 - Credential Guard enabled
 }
 
 function Log {
@@ -441,7 +444,39 @@ Save "01_group_members_admins.txt" (
         catch { "Error: $_" } }
 )
 
-# --- Logon & Authentication Events -------------------------------------------
+# -- Hardware security baseline (CIS 1.1) --
+$biosInfo = Get-WmiObject Win32_BIOS | Select-Object Manufacturer, SMBIOSBIOSVersion, ReleaseDate, SerialNumber
+$tpmInfo = try { Get-Tpm -ErrorAction Stop | Select-Object TpmPresent, TpmReady, TpmEnabled, ManufacturerVersion } catch { @{ TpmPresent = "Query failed: $_" } }
+$secureBoot = try { Confirm-SecureBootUEFI -ErrorAction Stop } catch { "Not supported or unavailable" }
+[ordered]@{
+    BIOS       = $biosInfo | Select-Object Manufacturer, SMBIOSBIOSVersion, ReleaseDate, SerialNumber
+    TPM        = $tpmInfo
+    SecureBoot = $secureBoot
+} | ConvertTo-Json -Depth 3 | Set-Content "$OutputPath\01_bios_tpm.json" -Encoding UTF8
+Log "  Saved: 01_bios_tpm.json (BIOS, TPM, Secure Boot status)"
+
+# -- GPO resultant set (useful even for workgroup machines -- confirms no policies applied) --
+Save "01_gpo_rsop.txt" (gpresult /r /scope:computer 2>&1 | Out-String)
+Log "  Saved: 01_gpo_rsop.txt"
+
+# -- Installed Windows features (check for PSv2, Hyper-V, SMBv1 feature, WSL, IIS) --
+try {
+    $enabledFeatures = Get-WindowsOptionalFeature -Online -ErrorAction Stop |
+        Where-Object { $_.State -eq "Enabled" } |
+        Select-Object FeatureName, State
+    Save "01_windows_features.txt" ($enabledFeatures | Format-Table -AutoSize | Out-String)
+    Log "  [CIS 2.1] $($enabledFeatures.Count) Windows features enabled -- see 01_windows_features.txt"
+
+    # Specifically flag PowerShell v2 (bypasses ScriptBlock logging -- CIS 8.5)
+    $psv2 = $enabledFeatures | Where-Object { $_.FeatureName -match "MicrosoftWindowsPowerShellV2" }
+    if ($psv2) {
+        Log "  [CIS 8.5] *** FLAGGED: PowerShell v2 engine is ENABLED -- can bypass script logging ***" "DarkYellow"
+    }
+} catch {
+    Log "  Could not query Windows features: $_" "DarkGray"
+}
+
+# --- Logon & Authentication Events-------------------------------------------
 
 Start-Section "LOGON EVENTS" "Last 30 days of Security log: successes, failures, after-hours logins, privilege use (CIS 8.2 -- validates audit logging is active)"
 $since = (Get-Date).AddDays(-30)
@@ -576,7 +611,25 @@ if ($weirdServices) {
     Log "  *** Services running from unusual paths -- see 04_services_SUSPICIOUS.txt ***" "DarkYellow"
 }
 
-# --- Scheduled Tasks ----------------------------------------------------------
+# Non-Microsoft services running as LocalSystem -- LOB apps with excessive privilege
+# Common in SMB: billing, POS, accounting software running as SYSTEM unnecessarily
+$localSystemLOB = Get-WmiObject Win32_Service | Where-Object {
+    $_.State -eq "Running" -and
+    $_.StartName -imatch "LocalSystem|NT AUTHORITY\\SYSTEM" -and
+    $_.PathName -and
+    $_.PathName -notmatch 'System32|SysWOW64|svchost|MsMpEng|spoolsv|WSearch' -and
+    $_.PathName -notmatch '^"?[A-Z]:\\Windows'
+}
+if ($localSystemLOB) {
+    Save "04_services_localsystem_LOB.txt" (
+        $localSystemLOB | Select-Object Name, DisplayName, PathName, StartName |
+        Format-Table -AutoSize | Out-String
+    )
+    Log "  *** $($localSystemLOB.Count) non-Windows service(s) running as LocalSystem -- see 04_services_localsystem_LOB.txt ***" "DarkYellow"
+    Log "  Note: LocalSystem grants full machine access. Verify each service requires this privilege level." "DarkGray"
+}
+
+# --- Scheduled Tasks----------------------------------------------------------
 
 Start-Section "SCHEDULED TASKS" "Active tasks; flags those running scripts or executables from AppData/Temp"
 $tasks = Get-ScheduledTask | Where-Object { $_.State -ne 'Disabled' } |
@@ -2218,10 +2271,60 @@ if ($nbDisabled) {
     Log "  [CIS 4.1] *** FLAGGED: NetBIOS over TCP/IP enabled on one or more adapters -- poisoning risk ***" "DarkYellow"
 }
 
+# CIS 4.1 / 9.2 -- SMB signing (prevents relay attacks)
+$smbSigningRequired = $null
+try {
+    $smbSrvCfg = Get-SmbServerConfiguration -ErrorAction Stop
+    $smbSigningRequired = $smbSrvCfg.RequireSecuritySignature
+    $script:cisIG1.SMBSigningRequired = $smbSigningRequired
+    if (-not $smbSigningRequired) {
+        Log "  [CIS 4.1] *** FLAGGED: SMB signing is not required -- vulnerable to relay attacks ***" "DarkYellow"
+    } else {
+        Log "  [CIS 4.1] SMB signing required" "DarkGray"
+    }
+} catch {
+    Log "  [CIS 4.1] Could not query SMB signing status: $_" "DarkGray"
+}
+
+# CIS 4.1 -- LSA protection (RunAsPPL) and Credential Guard
+$lsaKey = Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa" -ErrorAction SilentlyContinue
+$lsaPPL = $lsaKey.RunAsPPL
+$script:cisIG1.LSAProtection = ($lsaPPL -eq 1)
+if ($lsaPPL -eq 1) {
+    Log "  [CIS 4.1] LSA protection (RunAsPPL) enabled" "DarkGray"
+} else {
+    Log "  [CIS 4.1] *** FLAGGED: LSA protection (RunAsPPL) not enabled -- credential theft risk ***" "DarkYellow"
+}
+
+$dgKey = Get-ItemProperty "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeviceGuard" -ErrorAction SilentlyContinue
+$credGuard = $dgKey.LsaCfgFlags
+$script:cisIG1.CredentialGuard = ($credGuard -ge 1)
+if ($credGuard -ge 1) {
+    Log "  [CIS 4.1] Credential Guard enabled (LsaCfgFlags=$credGuard)" "DarkGray"
+} else {
+    Log "  [CIS 4.1] Credential Guard not configured (common on SMB workstations)" "DarkGray"
+}
+
+# Local security policy export (secedit) -- password complexity, lockout, audit categories
+try {
+    $seceditTmp = "$env:TEMP\ce_secpol_$(Get-Random).cfg"
+    $seceditResult = & secedit /export /cfg $seceditTmp 2>&1
+    if (Test-Path $seceditTmp) {
+        Copy-Item $seceditTmp "$OutputPath\15_cis_local_security_policy.txt" -Force
+        Remove-Item $seceditTmp -Force -ErrorAction SilentlyContinue
+        Log "  [CIS 5.2] Local security policy exported -- see 15_cis_local_security_policy.txt"
+    }
+} catch {
+    Log "  Could not export security policy: $_" "DarkGray"
+}
+
 $secConfigReport = [ordered]@{
-    SMBv1Enabled   = $smb1Enabled
-    LLMNRDisabled  = $script:cisIG1.LLMNRDisabled
-    NetBIOSDisabled = $nbDisabled
+    SMBv1Enabled       = $smb1Enabled
+    LLMNRDisabled      = $script:cisIG1.LLMNRDisabled
+    NetBIOSDisabled    = $nbDisabled
+    SMBSigningRequired = $smbSigningRequired
+    LSAProtection      = ($lsaPPL -eq 1)
+    CredentialGuard    = ($credGuard -ge 1)
 }
 $secConfigReport | ConvertTo-Json | Set-Content "$OutputPath\18_cis_secure_config.json" -Encoding UTF8
 
@@ -2665,6 +2768,20 @@ Write-Host $summary -ForegroundColor Green
 Add-Content -Path $logFile -Value $summary
 
 # --- Auto-ZIP Evidence Folder -------------------------------------------------
+
+# --- Evidence Hash Manifest (chain of custody) --------------------------------
+Log "  Generating SHA256 hash manifest for evidence integrity..."
+try {
+    $hashManifest = Get-ChildItem $OutputPath -Recurse -File -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash
+            "$hash  $($_.FullName.Replace($OutputPath, '.'))"
+        }
+    $hashManifest | Set-Content "$OutputPath\_evidence_hashes.sha256" -Encoding UTF8
+    Log "  Evidence hash manifest: $($hashManifest.Count) files hashed -- see _evidence_hashes.sha256"
+} catch {
+    Log "  Could not generate hash manifest: $_" "DarkGray"
+}
 
 $zipPath = "$OutputPath.zip"
 Log "  Compressing evidence folder to $zipPath ..."
