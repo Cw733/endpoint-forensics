@@ -13,6 +13,18 @@ Set-ExecutionPolicy -Scope Process Bypass
 # Include network scan of all hosts on the LAN
 .\Collect.ps1 -NetworkScan
 
+# Full collection with USB toolkit (RAM capture + threat hunt + sanitize)
+.\Collect.ps1 -ToolsPath "E:\tools" -CaptureRAM -ThreatHunt
+
+# Privacy-sensitive client (sanitized output only, raw evidence deleted)
+.\Collect.ps1 -SanitizeOnly -OutputRoot "E:\"
+
+# Incident response mode (no sanitization, max data retention)
+.\Collect.ps1 -NoSanitize -CaptureRAM -ThreatHunt -ToolsPath "E:\tools"
+
+# Kitchen sink (all features, network scan, threat hunt, RAM capture)
+.\Collect.ps1 -NetworkScan -CaptureRAM -ThreatHunt -ToolsPath "E:\tools" -OutputRoot "E:\"
+
 # Run targeted investigation script
 powershell -ExecutionPolicy Bypass -File .\Targeted-Investigation.ps1
 

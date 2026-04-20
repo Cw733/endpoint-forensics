@@ -55,6 +55,15 @@ param(
     [int]   $PingTimeout = 500,  # ms per host for ping sweep
     [System.Management.Automation.PSCredential]$RemoteCredential = $null,
 
+    # Sanitization options
+    [switch]$NoSanitize,         # Skip sanitized copy (incident response mode)
+    [switch]$SanitizeOnly,       # ONLY keep sanitized copy, delete raw evidence
+
+    # External tool integration (auto-detected from ToolsPath or script directory)
+    [string]$ToolsPath   = "",   # Path to tools\ folder (e.g. "E:\tools")
+    [switch]$CaptureRAM,         # Run WinPmem before collection
+    [switch]$ThreatHunt,         # Run Chainsaw/hayabusa after EVTX export
+
     [switch]$Help
 )
 
@@ -114,6 +123,34 @@ PARAMETERS
       Only used with -NetworkScan. If omitted, runs as the current user.
       Example: -RemoteCredential (Get-Credential)
 
+  -NoSanitize
+      Skip creation of sanitized evidence copy. Use for incident response
+      or legal cases where raw data must be preserved and sanitization
+      overhead is unnecessary.
+
+  -SanitizeOnly
+      Create ONLY the sanitized evidence copy and DELETE the raw evidence.
+      Use for privacy-sensitive clients where PII must not persist on your
+      USB drive. WARNING: Raw evidence is permanently deleted.
+
+  -ToolsPath <path>
+      Path to the tools\ folder on your USB drive containing Sysinternals,
+      Chainsaw, hayabusa, WinPmem, etc. Auto-detected from script directory
+      if a tools\ subfolder or sibling folder exists.
+      Example: -ToolsPath "E:\tools"
+
+  -CaptureRAM
+      Capture live RAM using WinPmem before evidence collection begins.
+      Requires winpmem_mini_x64.exe in the tools path. Output is saved as
+      00_memory_capture.raw in the evidence folder. Run this BEFORE other
+      collection to minimize memory contamination.
+
+  -ThreatHunt
+      After evidence collection, run Chainsaw and/or hayabusa against
+      Windows event logs using Sigma detection rules. Results are saved
+      as 19_chainsaw_results\ and 19_hayabusa_timeline.csv. Requires
+      the tools to be present in the tools path.
+
   -Help
       Show this help text and exit.
 
@@ -128,6 +165,15 @@ EXAMPLES
   Local scan + LAN triage (auto-detect subnet):
       .\Collect.ps1 -NetworkScan
 
+  Full collection with USB toolkit (RAM + threat hunt + sanitize):
+      .\Collect.ps1 -ToolsPath "E:\tools" -CaptureRAM -ThreatHunt
+
+  Privacy-sensitive client (sanitized output only, raw deleted):
+      .\Collect.ps1 -SanitizeOnly -OutputRoot "E:\"
+
+  Incident response (no sanitization, maximum data retention):
+      .\Collect.ps1 -NoSanitize -CaptureRAM -ThreatHunt -ToolsPath "E:\tools"
+
   Local scan + LAN triage with explicit subnet and alternate credentials:
       .\Collect.ps1 -NetworkScan -Subnet "192.168.10" -RemoteCredential (Get-Credential)
 
@@ -139,6 +185,8 @@ OUTPUT FILES (key files -- full list in _collection_log.txt)
 
   quick_indicators.json         Instant risk flag summary (start here)
   cis_ig1_gaps.json             CIS IG1 compliance gaps (all CIS checks in one file)
+  _evidence_hashes.sha256       SHA256 hash manifest (chain of custody)
+  _sanitization_manifest.json   Sanitization report (what was redacted)
   00_metadata.txt               Collection info + public IP for external scanning
   02_logon_events.csv           30 days of logon/logoff/failure events
   03_processes_FLAGGED.txt      Suspicious processes (if any)
@@ -170,6 +218,15 @@ NOTES
     design -- WMI repair-triggers on access. Expected on remote hosts only.
   - If criminal activity is found, stop and preserve evidence before making
     any additional system changes. Contact legal counsel before proceeding.
+  - Sanitization redacts SSNs, credit cards, emails, phone numbers, and DOBs
+    using consistent placeholders (e.g., [EMAIL-1] always maps to the same
+    address across all files). Binary files (.db, .evtx) are NOT sanitized.
+  - External tools (Sysinternals, Chainsaw, etc.) are optional enhancements.
+    The script works fully without them. When detected in -ToolsPath, they
+    add deeper analysis: comprehensive autoruns, signature verification,
+    and Sigma-based threat hunting.
+  - For RAM capture (-CaptureRAM), always run BEFORE making other changes
+    to the system. RAM evidence is volatile and degrades with activity.
 
 "@ -ForegroundColor Gray
     Write-Host ("=" * $w) -ForegroundColor Cyan
@@ -195,6 +252,207 @@ $OutputPath = Join-Path $OutputRoot "Evidence_${hostname}_$timestamp"
 New-Item -ItemType Directory -Force -Path $OutputPath | Out-Null
 $script:_scriptStart = Get-Date
 $logFile = "$OutputPath\_collection_log.txt"
+
+# --- Sanitization Engine -------------------------------------------------------
+
+function Invoke-Sanitize {
+    param(
+        [string]$SourcePath,
+        [string]$DestPath
+    )
+
+    Log "  Creating sanitized evidence copy..." "Cyan"
+    $sanitizeStart = Get-Date
+
+    # Copy entire evidence folder
+    Copy-Item -Path $SourcePath -Destination $DestPath -Recurse -Force
+
+    # PII patterns with consistent placeholder mapping
+    $script:emailMap  = @{}; $script:emailIdx  = 0
+    $script:phoneMap  = @{}; $script:phoneIdx  = 0
+    $script:ssnMap    = @{}; $script:ssnIdx    = 0
+
+    # Regex patterns for PII detection
+    $patterns = [ordered]@{
+        SSN           = '\b\d{3}-\d{2}-\d{4}\b'
+        CreditCard    = '\b(?:4\d{3}|5[1-5]\d{2}|3[47]\d{2}|6(?:011|5\d{2}))[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b'
+        BankAccount   = '\b\d{8,17}\b(?=.*(?:account|acct|routing|aba|ach))'
+        RoutingNumber = '\b(?:0[0-9]|1[0-2]|2[1-9]|3[0-2]|6[1-9]|7[0-2]|8[0-0])\d{7}\b'
+        Email         = '\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'
+        PhoneUS       = '\b(?:\+?1[-.]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b'
+        DOB           = '\b(?:0[1-9]|1[0-2])/(?:0[1-9]|[12]\d|3[01])/(?:19|20)\d{2}\b'
+    }
+
+    # Files to sanitize (text-based evidence files only)
+    $textExtensions = @('.txt', '.csv', '.json', '.md', '.log', '.xml', '.htm', '.html')
+    $sanitizedCount = 0
+    $redactionCount = 0
+
+    Get-ChildItem $DestPath -Recurse -File | Where-Object {
+        $textExtensions -contains $_.Extension.ToLower()
+    } | ForEach-Object {
+        $filePath = $_.FullName
+        try {
+            $content = Get-Content $filePath -Raw -ErrorAction Stop
+            if (-not $content) { return }
+
+            $originalContent = $content
+            $fileRedactions = 0
+
+            # SSN redaction with consistent mapping
+            $content = [regex]::Replace($content, $patterns.SSN, {
+                param($m)
+                if (-not $script:ssnMap.ContainsKey($m.Value)) {
+                    $script:ssnIdx++
+                    $script:ssnMap[$m.Value] = "[SSN-$($script:ssnIdx)]"
+                }
+                $fileRedactions++
+                $script:ssnMap[$m.Value]
+            })
+
+            # Credit card redaction
+            $content = [regex]::Replace($content, $patterns.CreditCard, {
+                param($m)
+                $fileRedactions++
+                "[CC-REDACTED]"
+            })
+
+            # Email redaction with consistent mapping
+            $content = [regex]::Replace($content, $patterns.Email, {
+                param($m)
+                $val = $m.Value.ToLower()
+                # Preserve known system/vendor emails
+                if ($val -match '@(microsoft|windows|google|apple|mozilla|fortinet|avg|avast|malwarebytes)\.') {
+                    return $m.Value
+                }
+                if (-not $script:emailMap.ContainsKey($val)) {
+                    $script:emailIdx++
+                    $script:emailMap[$val] = "[EMAIL-$($script:emailIdx)]"
+                }
+                $fileRedactions++
+                $script:emailMap[$val]
+            })
+
+            # Phone number redaction with consistent mapping
+            $content = [regex]::Replace($content, $patterns.PhoneUS, {
+                param($m)
+                # Skip if it looks like a port number, PID, or event ID (short or all digits in context)
+                if ($m.Value -match '^\d{4,5}$') { return $m.Value }
+                if (-not $script:phoneMap.ContainsKey($m.Value)) {
+                    $script:phoneIdx++
+                    $script:phoneMap[$m.Value] = "[PHONE-$($script:phoneIdx)]"
+                }
+                $fileRedactions++
+                $script:phoneMap[$m.Value]
+            })
+
+            # DOB redaction
+            $content = [regex]::Replace($content, $patterns.DOB, {
+                param($m)
+                $fileRedactions++
+                "[DOB-REDACTED]"
+            })
+
+            if ($content -ne $originalContent) {
+                Set-Content $filePath -Value $content -Encoding UTF8 -NoNewline
+                $sanitizedCount++
+                $redactionCount += $fileRedactions
+            }
+        } catch {
+            # Skip files that can't be read (binary, locked, etc.)
+        }
+    }
+
+    # Write sanitization manifest
+    $manifest = [ordered]@{
+        SanitizedAt     = (Get-Date).ToString("o")
+        SourceFolder    = $SourcePath
+        FilesModified   = $sanitizedCount
+        TotalRedactions = $redactionCount
+        MappingCounts   = [ordered]@{
+            UniqueEmails = $script:emailIdx
+            UniquePhones = $script:phoneIdx
+            UniqueSSNs   = $script:ssnIdx
+        }
+        Patterns        = @("SSN", "CreditCard", "Email", "PhoneUS", "DOB")
+        Note            = "Redacted values use consistent placeholders (e.g., [EMAIL-1] is always the same address across all files). Binary files (.db, .zip, .evtx) are NOT sanitized."
+    }
+    $manifest | ConvertTo-Json -Depth 3 | Set-Content "$DestPath\_sanitization_manifest.json" -Encoding UTF8
+
+    $elapsed = [math]::Round(((Get-Date) - $sanitizeStart).TotalSeconds)
+    Log "  Sanitization complete: $redactionCount redactions across $sanitizedCount files (${elapsed}s)" "Green"
+    Log "  Sanitized copy: $DestPath"
+    Log "  Manifest: _sanitization_manifest.json"
+}
+
+# --- External Tool Resolver ----------------------------------------------------
+
+$script:toolPaths = @{}
+
+function Find-Tool {
+    param([string]$ExeName, [string[]]$SearchDirs)
+    if ($script:toolPaths.ContainsKey($ExeName)) { return $script:toolPaths[$ExeName] }
+
+    $searchLocations = @($SearchDirs) + @(
+        $ToolsPath,
+        (Split-Path -Parent $MyInvocation.ScriptName),
+        "$((Split-Path -Parent $MyInvocation.ScriptName))\tools",
+        "$((Split-Path -Parent $MyInvocation.ScriptName))\..\tools"
+    ) | Where-Object { $_ -and (Test-Path $_) }
+
+    foreach ($dir in $searchLocations) {
+        $found = Get-ChildItem $dir -Filter $ExeName -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($found) {
+            $script:toolPaths[$ExeName] = $found.FullName
+            return $found.FullName
+        }
+    }
+    return $null
+}
+
+# Auto-detect ToolsPath if not specified
+if (-not $ToolsPath) {
+    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $candidates = @(
+        "$scriptDir\tools",
+        "$scriptDir\..\tools",
+        "$(Split-Path $scriptDir)\tools"
+    )
+    foreach ($c in $candidates) {
+        if (Test-Path $c) { $ToolsPath = (Resolve-Path $c).Path; break }
+    }
+}
+
+if ($ToolsPath -and (Test-Path $ToolsPath)) {
+    Log "  Tools folder detected: $ToolsPath" "DarkGray"
+}
+
+# --- RAM Capture (must run BEFORE evidence collection) --------------------------
+
+if ($CaptureRAM) {
+    $winpmemExe = Find-Tool "winpmem*.exe" @($ToolsPath)
+    if ($winpmemExe) {
+        $ramFile = "$OutputPath\00_memory_capture.raw"
+        Log "  Capturing RAM with WinPmem (this may take several minutes)..." "Cyan"
+        Log "  RAM dump destination: $ramFile"
+        try {
+            $ramStart = Get-Date
+            & $winpmemExe $ramFile 2>&1 | Out-Null
+            if (Test-Path $ramFile) {
+                $ramSizeMB = [math]::Round((Get-Item $ramFile).Length / 1MB, 0)
+                $ramElapsed = [math]::Round(((Get-Date) - $ramStart).TotalSeconds)
+                Log "  RAM capture complete: ${ramSizeMB}MB in ${ramElapsed}s" "Green"
+            } else {
+                Log "  RAM capture failed -- file not created" "DarkYellow"
+            }
+        } catch {
+            Log "  RAM capture failed: $_" "DarkYellow"
+        }
+    } else {
+        Log "  -CaptureRAM specified but winpmem not found in tools path" "DarkYellow"
+        Log "  Download from: https://github.com/Velocidex/WinPmem/releases" "DarkGray"
+    }
+}
 
 # Aggregated risk indicators -- populated throughout, written to JSON at end
 $script:indicators = [ordered]@{
@@ -589,6 +847,29 @@ if ($flagged) {
 }
 $script:indicators.SuspiciousProcessCount = ($flagged | Measure-Object).Count
 
+# Detect DLL injection / sideloading via Sysinternals listdlls (if available)
+$listdllsExe = Find-Tool "listdlls64.exe" @($ToolsPath)
+if (-not $listdllsExe) { $listdllsExe = Find-Tool "listdlls.exe" @($ToolsPath) }
+if ($listdllsExe) {
+    Log "  Running listdlls (unsigned DLL detection)..."
+    try {
+        $dllOutput = & $listdllsExe -u -accepteula -nobanner 2>&1
+        if ($dllOutput) {
+            Save "03_unsigned_dlls.txt" ($dllOutput | Out-String)
+            $unsignedCount = ($dllOutput | Select-String "^\s+0x" | Measure-Object).Count
+            if ($unsignedCount -gt 0) {
+                Log "  *** Unsigned DLLs found in running processes -- see 03_unsigned_dlls.txt ***" "DarkYellow"
+            } else {
+                Log "  No unsigned DLLs detected" "DarkGray"
+            }
+        }
+    } catch {
+        Log "  listdlls failed: $_" "DarkGray"
+    }
+} else {
+    Log "  Sysinternals listdlls not found -- skipping DLL injection check" "DarkGray"
+}
+
 # --- Services ----------------------------------------------------------------
 
 Start-Section "SERVICES" "All services; flags those running from outside System32/Program Files"
@@ -609,6 +890,24 @@ $weirdServices = Get-WmiObject Win32_Service | Where-Object {
 if ($weirdServices) {
     Save "04_services_SUSPICIOUS.txt" ($weirdServices | Select-Object Name, PathName, StartName | Format-Table -AutoSize | Out-String)
     Log "  *** Services running from unusual paths -- see 04_services_SUSPICIOUS.txt ***" "DarkYellow"
+
+    # Verify digital signatures on suspicious service binaries (if sigcheck available)
+    $sigcheckExe = Find-Tool "sigcheck64.exe" @($ToolsPath)
+    if (-not $sigcheckExe) { $sigcheckExe = Find-Tool "sigcheck.exe" @($ToolsPath) }
+    if ($sigcheckExe) {
+        Log "  Running sigcheck on suspicious service binaries..."
+        $suspPaths = $weirdServices | ForEach-Object {
+            $p = $_.PathName -replace '^"([^"]+)".*','$1' -replace '\s+-\S+.*',''
+            if (Test-Path $p) { $p }
+        } | Select-Object -Unique
+        if ($suspPaths) {
+            $sigResults = $suspPaths | ForEach-Object {
+                & $sigcheckExe -nobanner -accepteula $_ 2>&1
+            }
+            Save "04_services_sigcheck.txt" ($sigResults | Out-String)
+            Log "  Saved: 04_services_sigcheck.txt (digital signature verification)"
+        }
+    }
 }
 
 # Non-Microsoft services running as LocalSystem -- LOB apps with excessive privilege
@@ -627,6 +926,27 @@ if ($localSystemLOB) {
     )
     Log "  *** $($localSystemLOB.Count) non-Windows service(s) running as LocalSystem -- see 04_services_localsystem_LOB.txt ***" "DarkYellow"
     Log "  Note: LocalSystem grants full machine access. Verify each service requires this privilege level." "DarkGray"
+}
+
+# Check service binary path permissions via Sysinternals accesschk (privilege escalation vector)
+$accesschkExe = Find-Tool "accesschk64.exe" @($ToolsPath)
+if (-not $accesschkExe) { $accesschkExe = Find-Tool "accesschk.exe" @($ToolsPath) }
+if ($accesschkExe) {
+    Log "  Running accesschk on service binary paths (privilege escalation check)..."
+    try {
+        # Check if non-admin users can write to any service binary
+        $svcPermResults = & $accesschkExe -accepteula -nobanner -uwcqv "Users" * -s 2>&1
+        $writableServices = $svcPermResults | Select-String "RW |SERVICE_CHANGE_CONFIG|WRITE_DAC|WRITE_OWNER"
+        if ($writableServices) {
+            Save "04_services_WRITABLE.txt" ($svcPermResults | Out-String)
+            Log "  *** CRITICAL: Users group has write access to service(s) -- privilege escalation risk ***" "DarkYellow"
+            Log "  See 04_services_WRITABLE.txt" "DarkYellow"
+        } else {
+            Log "  No writable service paths found for Users group" "DarkGray"
+        }
+    } catch {
+        Log "  accesschk failed: $_" "DarkGray"
+    }
 }
 
 # --- Scheduled Tasks----------------------------------------------------------
@@ -666,6 +986,29 @@ $autoruns = foreach ($key in $runKeys) {
 }
 Save "06_autoruns_registry.txt" ($autoruns | Format-Table -AutoSize | Out-String)
 
+# Enhanced autoruns via Sysinternals autorunsc (if available on USB)
+$autorunscExe = Find-Tool "autorunsc64.exe" @($ToolsPath)
+if (-not $autorunscExe) { $autorunscExe = Find-Tool "autorunsc.exe" @($ToolsPath) }
+if ($autorunscExe) {
+    Log "  Running Sysinternals autorunsc (comprehensive autorun scan)..."
+    try {
+        $autorunscOutput = & $autorunscExe -a * -h -s -nobanner -accepteula -c 2>&1
+        Save "06_autoruns_sysinternals.csv" ($autorunscOutput | Out-String)
+        Log "  Saved: 06_autoruns_sysinternals.csv (Sysinternals comprehensive autoruns)"
+        # Flag unsigned entries
+        $unsigned = $autorunscOutput | ConvertFrom-Csv -ErrorAction SilentlyContinue |
+            Where-Object { $_.'Signer' -and $_.'Signer' -notmatch 'Microsoft|Windows' -and $_.'Signer' -match 'not verified|^\(Not' }
+        if ($unsigned) {
+            Save "06_autoruns_UNSIGNED.csv" ($unsigned | ConvertTo-Csv -NoTypeInformation | Out-String)
+            Log "  *** $($unsigned.Count) unsigned autorun entries found -- see 06_autoruns_UNSIGNED.csv ***" "DarkYellow"
+        }
+    } catch {
+        Log "  autorunsc failed: $_" "DarkGray"
+    }
+} else {
+    Log "  Sysinternals autorunsc not found -- using registry-only autoruns" "DarkGray"
+}
+
 # Startup folder contents
 $startupFolders = @(
     "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup",
@@ -675,6 +1018,31 @@ $startupItems = foreach ($folder in $startupFolders) {
     if (Test-Path $folder) { Get-ChildItem $folder -Force }
 }
 Save "06_startup_folders.txt" ($startupItems | Format-Table FullName, LastWriteTime, Length -AutoSize | Out-String)
+
+# Alternate Data Streams scan via Sysinternals streams (malware hiding technique)
+$streamsExe = Find-Tool "streams64.exe" @($ToolsPath)
+if (-not $streamsExe) { $streamsExe = Find-Tool "streams.exe" @($ToolsPath) }
+if ($streamsExe) {
+    Log "  Scanning user profiles for Alternate Data Streams (ADS)..."
+    try {
+        $adsResults = @()
+        foreach ($profileDir in (Get-ChildItem "C:\Users" -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notin @('Public','Default','Default User','All Users') })) {
+            $ads = & $streamsExe -accepteula -nobanner -s $profileDir.FullName 2>&1 |
+                Where-Object { $_ -match ':' -and $_ -notmatch 'Error|^$' }
+            if ($ads) { $adsResults += $ads }
+        }
+        if ($adsResults) {
+            Save "06_alternate_data_streams.txt" ($adsResults | Out-String)
+            Log "  *** $($adsResults.Count) alternate data streams found in user profiles -- see 06_alternate_data_streams.txt ***" "DarkYellow"
+            Log "  Note: Some ADS are benign (Zone.Identifier from downloads). Review for hidden executables." "DarkGray"
+        } else {
+            Log "  No suspicious alternate data streams found" "DarkGray"
+        }
+    } catch {
+        Log "  streams scan failed: $_" "DarkGray"
+    }
+}
 
 # --- Network State ------------------------------------------------------------
 
@@ -2734,6 +3102,11 @@ if ($NetworkScan) {
 # --- Wrap Up ------------------------------------------------------------------
 
 $totalElapsed = [math]::Round(((Get-Date) - $script:_scriptStart).TotalSeconds)
+$sanitizeMsg = if ($NoSanitize) { "  Sanitized : SKIPPED (-NoSanitize)" }
+               elseif ($SanitizeOnly) { "  Sanitized : ONLY (raw deleted)" }
+               else { "  Sanitized : ${OutputPath}_sanitized" }
+$toolsMsg = if ($ToolsPath) { "  Tools     : $ToolsPath" } else { "  Tools     : (none detected)" }
+
 $summary = @"
 
 ================================================
@@ -2742,6 +3115,8 @@ $summary = @"
   Time      : $(Get-Date)
   Elapsed   : ${totalElapsed}s
   Output    : $OutputPath
+$sanitizeMsg
+$toolsMsg
 ================================================
 NEXT STEPS:
   1. Review quick_indicators.json for an instant risk summary.
@@ -2757,15 +3132,84 @@ NEXT STEPS:
        18_cis_audit_log_sizes.json, 18_cis_ps_logging.json
   5. Forensic persistence: 13b_prefetch_FLAGGED.csv, 13c_wmi_persistence.csv
   6. Security: 07_defender_exclusions.json (attacker abuse check)
-  7. Open .db files in "DB Browser for SQLite" (https://sqlitebrowser.org)
-  8. Open .csv event logs in Excel or Timeline Explorer
-  9. Review all files marked _FLAGGED, _SUSPICIOUS, or _UNEXPECTED first.
-  10. If criminal activity found, stop -- preserve and contact law enforcement
+  7. If threat hunt ran: 19_chainsaw_results\ and 19_hayabusa_timeline.csv
+  8. Open .db files in "DB Browser for SQLite" (https://sqlitebrowser.org)
+  9. Open .csv event logs in Excel or Timeline Explorer
+  10. Review all files marked _FLAGGED, _SUSPICIOUS, or _UNEXPECTED first.
+  11. Feed the _sanitized ZIP to AI with Analysis-Prompt.txt for report generation.
+  12. If criminal activity found, stop -- preserve and contact law enforcement
       BEFORE making any additional system changes.
 ================================================
 "@
 Write-Host $summary -ForegroundColor Green
 Add-Content -Path $logFile -Value $summary
+
+# --- Threat Hunt (Chainsaw / hayabusa) ----------------------------------------
+
+if ($ThreatHunt) {
+    Log "" "Cyan"
+    Log "  ========================================" "Cyan"
+    Log "  THREAT HUNT -- Scanning event logs with detection rules" "Cyan"
+    Log "  ========================================" "Cyan"
+
+    # Look for exported EVTX files or point to system logs
+    $evtxSource = "$env:SystemRoot\System32\winevt\Logs"
+
+    # Chainsaw
+    $chainsawExe = Find-Tool "chainsaw.exe" @($ToolsPath)
+    if ($chainsawExe) {
+        $chainsawDir = Split-Path $chainsawExe
+        $sigmaRules = Get-ChildItem $chainsawDir -Filter "rules" -Directory -Recurse | Select-Object -First 1
+        $sigmaMapping = Get-ChildItem $chainsawDir -Filter "sigma-event-logs-all.yml" -Recurse | Select-Object -First 1
+
+        if ($sigmaRules -and $sigmaMapping) {
+            Log "  Running Chainsaw with Sigma rules..."
+            try {
+                $chainsawOut = & $chainsawExe hunt $evtxSource --sigma-rules $sigmaRules.FullName --mapping $sigmaMapping.FullName --csv --output "$OutputPath\19_chainsaw_results" 2>&1
+                Log "  Chainsaw complete -- see 19_chainsaw_results\" "Green"
+            } catch {
+                Log "  Chainsaw failed: $_" "DarkYellow"
+            }
+        } else {
+            Log "  Chainsaw found but Sigma rules/mapping not found alongside it" "DarkYellow"
+            Log "  Expected: rules\ folder and sigma-event-logs-all.yml in $chainsawDir" "DarkGray"
+        }
+    } else {
+        Log "  Chainsaw not found in tools path" "DarkGray"
+    }
+
+    # hayabusa
+    $hayabusaExe = Find-Tool "hayabusa*.exe" @($ToolsPath)
+    if ($hayabusaExe) {
+        Log "  Running hayabusa timeline analysis..."
+        try {
+            & $hayabusaExe csv-timeline -d $evtxSource -o "$OutputPath\19_hayabusa_timeline.csv" -q 2>&1 | Out-Null
+            if (Test-Path "$OutputPath\19_hayabusa_timeline.csv") {
+                $hayaLines = (Get-Content "$OutputPath\19_hayabusa_timeline.csv" | Measure-Object).Count - 1
+                Log "  hayabusa: $hayaLines detections -- see 19_hayabusa_timeline.csv" "Green"
+            }
+        } catch {
+            Log "  hayabusa failed: $_" "DarkYellow"
+        }
+
+        # Also run logon summary
+        try {
+            $logonSummary = & $hayabusaExe logon-summary -d $evtxSource -q 2>&1
+            Save "19_hayabusa_logon_summary.txt" ($logonSummary | Out-String)
+            Log "  Saved: 19_hayabusa_logon_summary.txt"
+        } catch {
+            Log "  hayabusa logon-summary failed: $_" "DarkGray"
+        }
+    } else {
+        Log "  hayabusa not found in tools path" "DarkGray"
+    }
+
+    if (-not $chainsawExe -and -not $hayabusaExe) {
+        Log "  No threat hunting tools found. Install Chainsaw and/or hayabusa in your tools folder." "DarkYellow"
+        Log "  Chainsaw: https://github.com/WithSecureLabs/chainsaw/releases" "DarkGray"
+        Log "  hayabusa: https://github.com/Yamato-Security/hayabusa/releases" "DarkGray"
+    }
+}
 
 # --- Auto-ZIP Evidence Folder -------------------------------------------------
 
@@ -2783,12 +3227,48 @@ try {
     Log "  Could not generate hash manifest: $_" "DarkGray"
 }
 
-$zipPath = "$OutputPath.zip"
-Log "  Compressing evidence folder to $zipPath ..."
-try {
-    Compress-Archive -Path $OutputPath -DestinationPath $zipPath -Force -ErrorAction Stop
-    $zipSizeMB = [math]::Round((Get-Item $zipPath).Length / 1MB, 1)
-    Log "  Evidence archive ready: $zipPath (${zipSizeMB}MB)" "Green"
-} catch {
-    Log "  Could not create ZIP: $_" "DarkYellow"
+# --- Sanitization Pass --------------------------------------------------------
+
+$sanitizedPath = "${OutputPath}_sanitized"
+if (-not $NoSanitize) {
+    Invoke-Sanitize -SourcePath $OutputPath -DestPath $sanitizedPath
+} else {
+    Log "  Sanitization skipped (-NoSanitize specified)" "DarkGray"
+}
+
+# If -SanitizeOnly, remove the raw evidence folder (keep only sanitized)
+if ($SanitizeOnly -and (Test-Path $sanitizedPath)) {
+    Log "  -SanitizeOnly: Removing raw evidence folder..." "DarkYellow"
+    Remove-Item $OutputPath -Recurse -Force -ErrorAction SilentlyContinue
+    Log "  Raw evidence deleted. Only sanitized copy retained." "DarkYellow"
+    Log "  IMPORTANT: Raw evidence is gone. For legal/forensic use, re-run without -SanitizeOnly." "DarkYellow"
+}
+
+# --- Auto-ZIP Evidence Folder -------------------------------------------------
+
+# ZIP raw evidence (if it still exists)
+if (Test-Path $OutputPath) {
+    $zipPath = "$OutputPath.zip"
+    Log "  Compressing raw evidence folder to $zipPath ..."
+    try {
+        Compress-Archive -Path $OutputPath -DestinationPath $zipPath -Force -ErrorAction Stop
+        $zipSizeMB = [math]::Round((Get-Item $zipPath).Length / 1MB, 1)
+        Log "  Raw evidence archive: $zipPath (${zipSizeMB}MB)" "Green"
+    } catch {
+        Log "  Could not create ZIP: $_" "DarkYellow"
+    }
+}
+
+# ZIP sanitized evidence (if it exists)
+if (Test-Path $sanitizedPath) {
+    $sanitizedZip = "${sanitizedPath}.zip"
+    Log "  Compressing sanitized evidence folder to $sanitizedZip ..."
+    try {
+        Compress-Archive -Path $sanitizedPath -DestinationPath $sanitizedZip -Force -ErrorAction Stop
+        $sanZipMB = [math]::Round((Get-Item $sanitizedZip).Length / 1MB, 1)
+        Log "  Sanitized evidence archive: $sanitizedZip (${sanZipMB}MB)" "Green"
+        Log "  >>> Feed the SANITIZED zip to AI for report generation <<<" "Green"
+    } catch {
+        Log "  Could not create sanitized ZIP: $_" "DarkYellow"
+    }
 }

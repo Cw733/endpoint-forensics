@@ -58,12 +58,18 @@ SECTION 03 -- RUNNING PROCESSES
   03_processes.txt            -- All processes at collection time
   03_processes_FLAGGED.txt    -- Processes matching known RAT/spy/tunnel keywords
                                  (if this file exists, review immediately)
+  03_unsigned_dlls.txt        -- Unsigned DLLs in running processes (Sysinternals
+                                 listdlls; if exists, check for DLL injection)
 
 SECTION 04 -- SERVICES
   04_services_all.txt         -- All services and state
   04_services_running.txt     -- Running services with paths and run-as accounts
   04_services_SUSPICIOUS.txt  -- Services running from AppData/Temp/non-standard
                                  paths (if exists, HIGH priority)
+  04_services_sigcheck.txt    -- Digital signature verification of suspicious
+                                 service binaries (Sysinternals sigcheck)
+  04_services_WRITABLE.txt    -- Service binaries writable by Users group
+                                 (CRITICAL: privilege escalation vector)
   04_services_localsystem_LOB.txt -- Non-Windows services running as LocalSystem
                                  (LOB apps with excessive privilege -- verify need)
 
@@ -73,7 +79,14 @@ SECTION 05 -- SCHEDULED TASKS
 
 SECTION 06 -- STARTUP / AUTORUN
   06_autoruns_registry.txt    -- HKLM/HKCU Run keys
+  06_autoruns_sysinternals.csv -- Comprehensive autoruns from all categories
+                                 (Sysinternals autorunsc -- registry, scheduled tasks,
+                                 services, drivers, WMI, Winlogon, etc.)
+  06_autoruns_UNSIGNED.csv    -- Autorun entries with unverified signatures
+                                 (if exists, HIGH priority review)
   06_startup_folder.txt       -- Per-user and common startup folders
+  06_alternate_data_streams.txt -- Alternate Data Streams in user profiles
+                                 (Sysinternals streams; hidden file detection)
 
 SECTION 07 -- NETWORK STATE
   07_netstat_connections.txt  -- Active network connections with PIDs
@@ -172,6 +185,13 @@ SUMMARY FILES
   _evidence_hashes.sha256    -- SHA256 hash manifest for chain of custody
                                  in a single JSON for report generation
   webcam_concern_summary.json -- Webcam-specific indicator summary
+  _sanitization_manifest.json -- Sanitization report (what was redacted, counts)
+
+OPTIONAL TOOL OUTPUT (present when -ToolsPath and -ThreatHunt are used)
+  00_memory_capture.raw       -- Live RAM dump (WinPmem, with -CaptureRAM)
+  19_chainsaw_results\        -- Chainsaw Sigma detection results (CSV)
+  19_hayabusa_timeline.csv    -- hayabusa chronological detection timeline
+  19_hayabusa_logon_summary.txt -- hayabusa logon activity summary
 
 
 ==========================================================================
