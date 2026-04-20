@@ -719,8 +719,17 @@ $secureBoot = try { Confirm-SecureBootUEFI -ErrorAction Stop } catch { "Not supp
 Log "  Saved: 01_bios_tpm.json (BIOS, TPM, Secure Boot status)"
 
 # -- GPO resultant set (useful even for workgroup machines -- confirms no policies applied) --
-Save "01_gpo_rsop.txt" (gpresult /r /scope:computer 2>&1 | Out-String)
-Log "  Saved: 01_gpo_rsop.txt"
+$_statusFile = [IO.Path]::GetTempFileName()
+Invoke-Skippable -Label "gpresult (Group Policy RSoP)" -StatusFile $_statusFile -Action {
+    param($out, $statusFile)
+    "Running gpresult /r..." | Set-Content $statusFile
+    $result = gpresult /r /scope:computer 2>&1 | Out-String
+    $result | Set-Content "$out\01_gpo_rsop.txt" -Encoding UTF8
+    "Done" | Set-Content $statusFile
+} -ArgumentList $OutputPath, $_statusFile
+
+if (Test-Path "$OutputPath\01_gpo_rsop.txt") { Log "  Saved: 01_gpo_rsop.txt" }
+else { Log "  01_gpo_rsop.txt not created (skipped or failed)" "DarkGray" }
 
 # -- Installed Windows features (check for PSv2, Hyper-V, SMBv1 feature, WSL, IIS) --
 try {
@@ -857,19 +866,31 @@ $listdllsExe = Find-Tool "listdlls64.exe" @($ToolsPath)
 if (-not $listdllsExe) { $listdllsExe = Find-Tool "listdlls.exe" @($ToolsPath) }
 if ($listdllsExe) {
     Log "  Running listdlls (unsigned DLL detection)..."
-    try {
-        $dllOutput = & $listdllsExe -u -accepteula -nobanner 2>&1
-        if ($dllOutput) {
-            Save "03_unsigned_dlls.txt" ($dllOutput | Out-String)
-            $unsignedCount = ($dllOutput | Select-String "^\s+0x" | Measure-Object).Count
-            if ($unsignedCount -gt 0) {
-                Log "  *** Unsigned DLLs found in running processes -- see 03_unsigned_dlls.txt ***" "DarkYellow"
-            } else {
-                Log "  No unsigned DLLs detected" "DarkGray"
+    $_statusFile = [IO.Path]::GetTempFileName()
+    Invoke-Skippable -Label "listdlls (unsigned DLL detection)" -StatusFile $_statusFile -Action {
+        param($out, $statusFile, $exePath)
+        "Running listdlls..." | Set-Content $statusFile
+        try {
+            $dllOutput = & $exePath -u -accepteula -nobanner 2>&1
+            if ($dllOutput) {
+                ($dllOutput | Out-String) | Set-Content "$out\03_unsigned_dlls.txt" -Encoding UTF8
             }
+            "Done" | Set-Content $statusFile
+        } catch {
+            "Failed: $_" | Set-Content $statusFile
         }
-    } catch {
-        Log "  listdlls failed: $_" "DarkGray"
+    } -ArgumentList $OutputPath, $_statusFile, $listdllsExe
+
+    if (Test-Path "$OutputPath\03_unsigned_dlls.txt") {
+        Log "  Saved: 03_unsigned_dlls.txt"
+        $unsignedCount = (Select-String "^\s+0x" "$OutputPath\03_unsigned_dlls.txt" | Measure-Object).Count
+        if ($unsignedCount -gt 0) {
+            Log "  *** Unsigned DLLs found in running processes -- see 03_unsigned_dlls.txt ***" "DarkYellow"
+        } else {
+            Log "  No unsigned DLLs detected" "DarkGray"
+        }
+    } else {
+        Log "  03_unsigned_dlls.txt not created (skipped or failed)" "DarkGray"
     }
 } else {
     Log "  Sysinternals listdlls not found -- skipping DLL injection check" "DarkGray"
@@ -996,19 +1017,33 @@ $autorunscExe = Find-Tool "autorunsc64.exe" @($ToolsPath)
 if (-not $autorunscExe) { $autorunscExe = Find-Tool "autorunsc.exe" @($ToolsPath) }
 if ($autorunscExe) {
     Log "  Running Sysinternals autorunsc (comprehensive autorun scan)..."
-    try {
-        $autorunscOutput = & $autorunscExe -a * -h -s -nobanner -accepteula -c 2>&1
-        Save "06_autoruns_sysinternals.csv" ($autorunscOutput | Out-String)
-        Log "  Saved: 06_autoruns_sysinternals.csv (Sysinternals comprehensive autoruns)"
-        # Flag unsigned entries
-        $unsigned = $autorunscOutput | ConvertFrom-Csv -ErrorAction SilentlyContinue |
-            Where-Object { $_.'Signer' -and $_.'Signer' -notmatch 'Microsoft|Windows' -and $_.'Signer' -match 'not verified|^\(Not' }
-        if ($unsigned) {
-            Save "06_autoruns_UNSIGNED.csv" ($unsigned | ConvertTo-Csv -NoTypeInformation | Out-String)
-            Log "  *** $($unsigned.Count) unsigned autorun entries found -- see 06_autoruns_UNSIGNED.csv ***" "DarkYellow"
+    $_statusFile = [IO.Path]::GetTempFileName()
+    Invoke-Skippable -Label "autorunsc (comprehensive autorun scan)" -StatusFile $_statusFile -Action {
+        param($out, $statusFile, $exePath)
+        "Running autorunsc..." | Set-Content $statusFile
+        try {
+            $autorunscOutput = & $exePath -a * -h -s -nobanner -accepteula -c 2>&1
+            ($autorunscOutput | Out-String) | Set-Content "$out\06_autoruns_sysinternals.csv" -Encoding UTF8
+            "Processing unsigned entries..." | Set-Content $statusFile
+            $unsigned = $autorunscOutput | ConvertFrom-Csv -ErrorAction SilentlyContinue |
+                Where-Object { $_.'Signer' -and $_.'Signer' -notmatch 'Microsoft|Windows' -and $_.'Signer' -match 'not verified|^\(Not' }
+            if ($unsigned) {
+                ($unsigned | ConvertTo-Csv -NoTypeInformation | Out-String) | Set-Content "$out\06_autoruns_UNSIGNED.csv" -Encoding UTF8
+            }
+            "Done" | Set-Content $statusFile
+        } catch {
+            "Failed: $_" | Set-Content $statusFile
         }
-    } catch {
-        Log "  autorunsc failed: $_" "DarkGray"
+    } -ArgumentList $OutputPath, $_statusFile, $autorunscExe
+
+    if (Test-Path "$OutputPath\06_autoruns_sysinternals.csv") {
+        Log "  Saved: 06_autoruns_sysinternals.csv (Sysinternals comprehensive autoruns)"
+    } else {
+        Log "  06_autoruns_sysinternals.csv not created (skipped or failed)" "DarkGray"
+    }
+    if (Test-Path "$OutputPath\06_autoruns_UNSIGNED.csv") {
+        $unsignedCount = (Import-Csv "$OutputPath\06_autoruns_UNSIGNED.csv" | Measure-Object).Count
+        Log "  *** $unsignedCount unsigned autorun entries found -- see 06_autoruns_UNSIGNED.csv ***" "DarkYellow"
     }
 } else {
     Log "  Sysinternals autorunsc not found -- using registry-only autoruns" "DarkGray"
@@ -1029,23 +1064,39 @@ $streamsExe = Find-Tool "streams64.exe" @($ToolsPath)
 if (-not $streamsExe) { $streamsExe = Find-Tool "streams.exe" @($ToolsPath) }
 if ($streamsExe) {
     Log "  Scanning user profiles for Alternate Data Streams (ADS)..."
-    try {
-        $adsResults = @()
-        foreach ($profileDir in (Get-ChildItem "C:\Users" -Directory -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -notin @('Public','Default','Default User','All Users') })) {
-            $ads = & $streamsExe -accepteula -nobanner -s $profileDir.FullName 2>&1 |
-                Where-Object { $_ -match ':' -and $_ -notmatch 'Error|^$' }
-            if ($ads) { $adsResults += $ads }
+    $_statusFile = [IO.Path]::GetTempFileName()
+    Invoke-Skippable -Label "streams ADS scan (user profiles)" -StatusFile $_statusFile -Action {
+        param($out, $statusFile, $exePath)
+        "Starting ADS scan..." | Set-Content $statusFile
+        try {
+            $adsResults = @()
+            foreach ($profileDir in (Get-ChildItem "C:\Users" -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -notin @('Public','Default','Default User','All Users') })) {
+                "Scanning profile: $($profileDir.Name)..." | Set-Content $statusFile
+                $ads = & $exePath -accepteula -nobanner -s $profileDir.FullName 2>&1 |
+                    Where-Object { $_ -match ':' -and $_ -notmatch 'Error|^$' }
+                if ($ads) {
+                    $adsResults += $ads
+                    # Write partial results after each profile so data is preserved if skipped
+                    ($adsResults | Out-String) | Set-Content "$out\06_alternate_data_streams.txt" -Encoding UTF8
+                }
+            }
+            if ($adsResults) {
+                "Done -- $($adsResults.Count) streams found" | Set-Content $statusFile
+            } else {
+                "No ADS found" | Set-Content $statusFile
+            }
+        } catch {
+            "Failed: $_" | Set-Content $statusFile
         }
-        if ($adsResults) {
-            Save "06_alternate_data_streams.txt" ($adsResults | Out-String)
-            Log "  *** $($adsResults.Count) alternate data streams found in user profiles -- see 06_alternate_data_streams.txt ***" "DarkYellow"
-            Log "  Note: Some ADS are benign (Zone.Identifier from downloads). Review for hidden executables." "DarkGray"
-        } else {
-            Log "  No suspicious alternate data streams found" "DarkGray"
-        }
-    } catch {
-        Log "  streams scan failed: $_" "DarkGray"
+    } -ArgumentList $OutputPath, $_statusFile, $streamsExe
+
+    if (Test-Path "$OutputPath\06_alternate_data_streams.txt") {
+        $adsCount = (Get-Content "$OutputPath\06_alternate_data_streams.txt" | Where-Object { $_.Trim() } | Measure-Object).Count
+        Log "  *** $adsCount alternate data streams found in user profiles -- see 06_alternate_data_streams.txt ***" "DarkYellow"
+        Log "  Note: Some ADS are benign (Zone.Identifier from downloads). Review for hidden executables." "DarkGray"
+    } else {
+        Log "  No suspicious alternate data streams found" "DarkGray"
     }
 }
 

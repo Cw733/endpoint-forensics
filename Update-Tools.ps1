@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Downloads and updates portable forensics tools used by Collect.ps1.
 
