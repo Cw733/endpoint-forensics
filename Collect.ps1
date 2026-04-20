@@ -1204,20 +1204,30 @@ if ($disabledProfiles) {
 }
 
 # Firewall rules that allow all inbound traffic (Action=Allow, Direction=Inbound, no remote address filter)
-$suspiciousFWRules = Get-NetFirewallRule -Direction Inbound -Action Allow -Enabled True -ErrorAction SilentlyContinue |
-    Where-Object { $_.Profile -ne 'Domain' } |   # skip domain-policy rules
-    Select-Object DisplayName, Direction, Action, Profile, Enabled,
-        @{N="Program";  E={ ($_ | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue).Program }},
-        @{N="LocalPort"; E={ ($_ | Get-NetFirewallPortFilter       -ErrorAction SilentlyContinue).LocalPort }}
-Save "07_firewall_inbound_allow_rules.txt" ($suspiciousFWRules | Format-Table -AutoSize | Out-String)
-
-# Flag rules allowing Any port from Any remote address
-$broadFWRules = $suspiciousFWRules | Where-Object {
-    $_.LocalPort -in @("Any","*","0-65535") -or -not $_.LocalPort
-}
-if ($broadFWRules) {
-    Save "07_firewall_broad_rules_FLAGGED.txt" ($broadFWRules | Format-Table -AutoSize | Out-String)
-    Log "  *** Broad inbound firewall allow-rules found -- see 07_firewall_broad_rules_FLAGGED.txt ***" "Yellow"
+try {
+    $fwRules = @(Get-NetFirewallRule -Direction Inbound -Action Allow -Enabled True -ErrorAction Stop |
+        Where-Object { $_.Profile -notmatch 'Domain' })
+    Log "  Inbound allow rules (non-Domain): $($fwRules.Count)"
+    # Build lookup tables in bulk instead of per-rule queries (avoids WMI exhaustion)
+    $appFilters  = @{}; Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue |
+        ForEach-Object { $appFilters[$_.InstanceID] = $_.Program }
+    $portFilters = @{}; Get-NetFirewallPortFilter -ErrorAction SilentlyContinue |
+        ForEach-Object { $portFilters[$_.InstanceID] = $_.LocalPort }
+    $suspiciousFWRules = $fwRules | Select-Object DisplayName, Direction, Action, Profile, Enabled,
+        @{N="Program";  E={ $appFilters[$_.InstanceID] }},
+        @{N="LocalPort"; E={ $portFilters[$_.InstanceID] }}
+    Save "07_firewall_inbound_allow_rules.txt" ($suspiciousFWRules | Format-Table -AutoSize | Out-String)
+    # Flag rules allowing Any port from Any remote address
+    $broadFWRules = $suspiciousFWRules | Where-Object {
+        $_.LocalPort -in @("Any","*","0-65535") -or -not $_.LocalPort
+    }
+    if ($broadFWRules) {
+        Save "07_firewall_broad_rules_FLAGGED.txt" ($broadFWRules | Format-Table -AutoSize | Out-String)
+        Log "  *** Broad inbound firewall allow-rules found -- see 07_firewall_broad_rules_FLAGGED.txt ***" "Yellow"
+    }
+} catch {
+    Log "  WARNING: Firewall rule enumeration failed: $_" "Yellow"
+    Save "07_firewall_inbound_allow_rules.txt" "Could not enumerate firewall rules: $_"
 }
 
 # -- Proxy settings (system-wide and per-user WinINET) --------------------
