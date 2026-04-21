@@ -431,23 +431,6 @@ function Find-Tool {
     return $null
 }
 
-# Auto-detect ToolsPath if not specified
-if (-not $ToolsPath) {
-    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-    $candidates = @(
-        "$scriptDir\tools",
-        "$scriptDir\..\tools",
-        "$(Split-Path $scriptDir)\tools"
-    )
-    foreach ($c in $candidates) {
-        if (Test-Path $c) { $ToolsPath = (Resolve-Path $c).Path; break }
-    }
-}
-
-if ($ToolsPath -and (Test-Path $ToolsPath)) {
-    Log "  Tools folder detected: $ToolsPath" "DarkGray"
-}
-
 # --- RAM Capture (must run BEFORE evidence collection) --------------------------
 
 if ($CaptureRAM) {
@@ -664,6 +647,25 @@ function CopyFile {
     } else {
         Log "  Not found: $src" "DarkGray"
     }
+}
+
+# --- Tools Detection (after function definitions) --------------------------------
+
+# Auto-detect ToolsPath if not specified
+if (-not $ToolsPath) {
+    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $candidates = @(
+        "$scriptDir\tools",
+        "$scriptDir\..\tools",
+        "$(Split-Path $scriptDir)\tools"
+    )
+    foreach ($c in $candidates) {
+        if (Test-Path $c) { $ToolsPath = (Resolve-Path $c).Path; break }
+    }
+}
+
+if ($ToolsPath -and (Test-Path $ToolsPath)) {
+    Log "  Tools folder detected: $ToolsPath" "DarkGray"
 }
 
 # Determine which user profiles to examine
