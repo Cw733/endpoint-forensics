@@ -755,20 +755,35 @@ if (Test-Path "$OutputPath\01_gpo_rsop.txt") { Log "  Saved: 01_gpo_rsop.txt" }
 else { Log "  01_gpo_rsop.txt not created (skipped or failed)" "DarkGray" }
 
 # -- Installed Windows features (check for PSv2, Hyper-V, SMBv1 feature, WSL, IIS) --
+# Note: Get-WindowsOptionalFeature -Online requires Admin and may prompt for UAC.
+# Use DISM.exe as a more robust alternative that fails gracefully if not admin.
 try {
-    $enabledFeatures = Get-WindowsOptionalFeature -Online -ErrorAction Stop |
-        Where-Object { $_.State -eq "Enabled" } |
-        Select-Object FeatureName, State
-    Save "01_windows_features.txt" ($enabledFeatures | Format-Table -AutoSize | Out-String)
-    Log "  [CIS 2.1] $($enabledFeatures.Count) Windows features enabled -- see 01_windows_features.txt"
-
-    # Specifically flag PowerShell v2 (bypasses ScriptBlock logging -- CIS 8.5)
-    $psv2 = $enabledFeatures | Where-Object { $_.FeatureName -match "MicrosoftWindowsPowerShellV2" }
-    if ($psv2) {
-        Log "  [CIS 8.5] *** FLAGGED: PowerShell v2 engine is ENABLED -- can bypass script logging ***" "DarkYellow"
+    $dismOut = DISM.exe /online /get-features /format:brief 2>&1 | Where-Object { $_ }
+    if ($dismOut -match "Error") {
+        throw "DISM requires administrator privilege"
+    }
+    
+    $enabledFeatures = $dismOut | Where-Object { $_ -match '\s:\sEnabled' } | 
+        ForEach-Object { 
+            if ($_ -match '^([^\s]+)') {
+                [PSCustomObject]@{ FeatureName = $Matches[1]; State = "Enabled" }
+            }
+        }
+    
+    if ($enabledFeatures) {
+        Save "01_windows_features.txt" ($enabledFeatures | Format-Table -AutoSize | Out-String)
+        Log "  [CIS 2.1] $($enabledFeatures.Count) Windows features enabled -- see 01_windows_features.txt"
+        
+        # Specifically flag PowerShell v2 (bypasses ScriptBlock logging -- CIS 8.5)
+        $psv2 = $enabledFeatures | Where-Object { $_.FeatureName -match "MicrosoftWindowsPowerShellV2" }
+        if ($psv2) {
+            Log "  [CIS 8.5] *** FLAGGED: PowerShell v2 engine is ENABLED -- can bypass script logging ***" "DarkYellow"
+        }
+    } else {
+        Log "  No enabled Windows features detected via DISM" "DarkGray"
     }
 } catch {
-    Log "  Could not query Windows features: $_" "DarkGray"
+    Log "  Could not query Windows features: $_ (requires administrator privilege)" "DarkGray"
 }
 
 # --- Logon & Authentication Events-------------------------------------------
