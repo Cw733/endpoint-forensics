@@ -508,6 +508,7 @@ $script:cisIG1 = [ordered]@{
     PSScriptBlockLogging     = $null  # CIS 8.5 - PowerShell script block logging
     PSModuleLogging          = $null  # CIS 8.5 - PowerShell module logging
     AuditLogMaxSizes         = @{}    # CIS 8.3 - event log max sizes in MB
+    AuditPolicyDisabled      = @()    # CIS 8.3 - critical audit subcategories that are NOT enabled
     DefenderBehaviorMonitor  = $null  # CIS 10.7 - behavior-based detection enabled
     DefenderExclusions       = @()    # Defender exclusion paths (attacker abuse)
     RemovableDriveScan       = $null  # CIS 10.4 - Defender scans removable media
@@ -2708,21 +2709,57 @@ $blReport | Export-Csv "$OutputPath\17_cis_bitlocker_status.csv" -NoTypeInformat
 $script:cisIG1.BitLockerStatus = @($blReport | ForEach-Object { "$($_.Drive): $($_.Status)" })
 
 # CIS 10.3 -- Autorun / AutoPlay disabled for removable media
-$autorunKey  = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer"
-$autorunVal  = (Get-ItemProperty $autorunKey -ErrorAction SilentlyContinue).NoDriveTypeAutoRun
+# GPO can apply NoDriveTypeAutoRun in 4 distinct locations. Must check all and
+# use the most restrictive (highest bitmask = most drives disabled). Precedence:
+# machine GPO > user GPO > machine registry > user registry.
+$autorunLocations = @(
+    @{ Path = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer";                      Scope = "Machine GPO"  },
+    @{ Path = "HKCU:\SOFTWARE\Policies\Microsoft\Windows\Explorer";                      Scope = "User GPO"     },
+    @{ Path = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer";       Scope = "Machine Reg"  },
+    @{ Path = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer";       Scope = "User Reg"     }
+)
+$autorunValues = @{}
+$autorunEffective = $null
+foreach ($loc in $autorunLocations) {
+    $v = (Get-ItemProperty $loc.Path -ErrorAction SilentlyContinue).NoDriveTypeAutoRun
+    $autorunValues[$loc.Scope] = $v
+    if ($null -ne $v) {
+        # Most restrictive value (highest bitmask = more drives blocked) wins
+        if ($null -eq $autorunEffective -or $v -gt $autorunEffective) { $autorunEffective = $v }
+    }
+}
+# Also check NoAutorun (1 = disabled autorun entirely)
+$noAutorunGPO    = (Get-ItemProperty "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer" -ErrorAction SilentlyContinue).NoAutorun
+$noAutorunUser   = (Get-ItemProperty "HKCU:\SOFTWARE\Policies\Microsoft\Windows\Explorer" -ErrorAction SilentlyContinue).NoAutorun
+
 # Bit 4 (0x4) = removable drives; 0xFF = all drives; Microsoft recommendation = 0xFF
-if ($autorunVal -ne $null) {
-    $removableDisabled = ($autorunVal -band 0x4) -ne 0
+if ($null -ne $autorunEffective) {
+    $removableDisabled = ($autorunEffective -band 0x4) -ne 0
     $script:cisIG1.AutorunDisabled = $removableDisabled
     if ($removableDisabled) {
-        Log "  [CIS 10.3] Autorun disabled for removable drives (NoDriveTypeAutoRun = 0x$('{0:X}' -f $autorunVal))" "DarkGray"
+        Log "  [CIS 10.3] Autorun disabled for removable drives (effective NoDriveTypeAutoRun = 0x$('{0:X}' -f $autorunEffective))" "DarkGray"
     } else {
-        Log "  [CIS 10.3] *** FLAGGED: Autorun not explicitly disabled for removable drives ***" "DarkYellow"
+        Log "  [CIS 10.3] *** FLAGGED: Autorun not explicitly disabled for removable drives (NoDriveTypeAutoRun = 0x$('{0:X}' -f $autorunEffective)) ***" "DarkYellow"
     }
+} elseif ($noAutorunGPO -eq 1 -or $noAutorunUser -eq 1) {
+    # NoAutorun = 1 means autorun is fully disabled
+    $script:cisIG1.AutorunDisabled = $true
+    Log "  [CIS 10.3] Autorun fully disabled via NoAutorun policy" "DarkGray"
 } else {
     $script:cisIG1.AutorunDisabled = $false
-    Log "  [CIS 10.3] *** FLAGGED: NoDriveTypeAutoRun not set -- autorun policy not configured ***" "DarkYellow"
+    Log "  [CIS 10.3] *** FLAGGED: NoDriveTypeAutoRun not set in any registry/GPO location -- autorun policy not configured ***" "DarkYellow"
 }
+# Persist raw values for forensic review
+[ordered]@{
+    NoDriveTypeAutoRun_MachineGPO  = $autorunValues["Machine GPO"]
+    NoDriveTypeAutoRun_UserGPO     = $autorunValues["User GPO"]
+    NoDriveTypeAutoRun_MachineReg  = $autorunValues["Machine Reg"]
+    NoDriveTypeAutoRun_UserReg     = $autorunValues["User Reg"]
+    NoAutorun_MachineGPO           = $noAutorunGPO
+    NoAutorun_UserGPO              = $noAutorunUser
+    EffectiveNoDriveTypeAutoRun    = $autorunEffective
+    AutorunDisabledForRemovable    = $script:cisIG1.AutorunDisabled
+} | ConvertTo-Json | Set-Content "$OutputPath\18_cis_autorun_policy.json" -Encoding UTF8
 
 End-Section   # close CIS shares/encryption section
 
@@ -2801,13 +2838,17 @@ try {
 }
 
 # CIS 4.1 -- LSA protection (RunAsPPL) and Credential Guard
+# Windows 11 22H2+ added RunAsPPLBoot (newer variant that survives boot attacks)
+# Either value set to 1 means LSA protection is enabled.
 $lsaKey = Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa" -ErrorAction SilentlyContinue
-$lsaPPL = $lsaKey.RunAsPPL
-$script:cisIG1.LSAProtection = ($lsaPPL -eq 1)
-if ($lsaPPL -eq 1) {
-    Log "  [CIS 4.1] LSA protection (RunAsPPL) enabled" "DarkGray"
+$lsaPPL     = $lsaKey.RunAsPPL
+$lsaPPLBoot = $lsaKey.RunAsPPLBoot
+$lsaProtected = ($lsaPPL -eq 1 -or $lsaPPL -eq 2 -or $lsaPPLBoot -eq 1 -or $lsaPPLBoot -eq 2)
+$script:cisIG1.LSAProtection = $lsaProtected
+if ($lsaProtected) {
+    Log "  [CIS 4.1] LSA protection enabled (RunAsPPL=$lsaPPL, RunAsPPLBoot=$lsaPPLBoot)" "DarkGray"
 } else {
-    Log "  [CIS 4.1] *** FLAGGED: LSA protection (RunAsPPL) not enabled -- credential theft risk ***" "DarkYellow"
+    Log "  [CIS 4.1] *** FLAGGED: LSA protection (RunAsPPL/RunAsPPLBoot) not enabled -- credential theft risk ***" "DarkYellow"
 }
 
 $dgKey = Get-ItemProperty "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeviceGuard" -ErrorAction SilentlyContinue
@@ -2837,7 +2878,9 @@ $secConfigReport = [ordered]@{
     LLMNRDisabled      = $script:cisIG1.LLMNRDisabled
     NetBIOSDisabled    = $nbDisabled
     SMBSigningRequired = $smbSigningRequired
-    LSAProtection      = ($lsaPPL -eq 1)
+    LSAProtection      = $lsaProtected
+    LSA_RunAsPPL       = $lsaPPL
+    LSA_RunAsPPLBoot   = $lsaPPLBoot
     CredentialGuard    = ($credGuard -ge 1)
 }
 $secConfigReport | ConvertTo-Json | Set-Content "$OutputPath\18_cis_secure_config.json" -Encoding UTF8
@@ -2924,6 +2967,50 @@ foreach ($evtLogName in @("Security","System","Application","Windows PowerShell"
 }
 $script:cisIG1.AuditLogMaxSizes = $logSizes
 $logSizes | ConvertTo-Json -Depth 3 | Set-Content "$OutputPath\18_cis_audit_log_sizes.json" -Encoding UTF8
+
+# CIS 8.3 -- Actual audit policy (auditpol reflects *effective* GPO-applied policy)
+# Checking registry alone is unreliable because Group Policy applies via LSA and
+# may not populate the registry directly. auditpol queries the LSA directly.
+try {
+    $auditpolOut = & auditpol.exe /get /category:* 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $auditpolOut | Set-Content "$OutputPath\18_cis_audit_policy.txt" -Encoding UTF8
+        # Parse key categories into JSON for programmatic review
+        $auditCategories = @{}
+        foreach ($line in $auditpolOut) {
+            # Lines look like:  "  Logon                                   Success and Failure"
+            if ($line -match "^\s{2}(\S.*?)\s{2,}(No Auditing|Success|Failure|Success and Failure)\s*$") {
+                $auditCategories[$Matches[1].Trim()] = $Matches[2].Trim()
+            }
+        }
+        $auditCategories | ConvertTo-Json | Set-Content "$OutputPath\18_cis_audit_categories.json" -Encoding UTF8
+
+        # Flag critical subcategories that should be enabled
+        $criticalSubs = @(
+            "Logon", "Logoff", "Account Lockout", "Special Logon",
+            "Process Creation", "Credential Validation",
+            "User Account Management", "Security Group Management",
+            "Audit Policy Change", "Authentication Policy Change",
+            "Sensitive Privilege Use", "Other Logon/Logoff Events"
+        )
+        $disabled = @()
+        foreach ($sub in $criticalSubs) {
+            if ($auditCategories.ContainsKey($sub) -and $auditCategories[$sub] -eq "No Auditing") {
+                $disabled += $sub
+            }
+        }
+        if ($disabled.Count -gt 0) {
+            Log "  [CIS 8.3] *** FLAGGED: $($disabled.Count) critical audit subcategories not enabled: $($disabled -join ', ') ***" "DarkYellow"
+        } else {
+            Log "  [CIS 8.3] All critical audit subcategories enabled (or configured)" "DarkGray"
+        }
+        $script:cisIG1.AuditPolicyDisabled = $disabled
+    } else {
+        Log "  [CIS 8.3] auditpol query failed (requires admin): $auditpolOut" "DarkGray"
+    }
+} catch {
+    Log "  [CIS 8.3] Could not run auditpol: $_" "DarkGray"
+}
 
 # CIS 8.5 -- Detailed audit logging: PowerShell ScriptBlock and Module logging
 $psLogging = [ordered]@{}
