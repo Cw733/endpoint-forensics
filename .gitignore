@@ -6,8 +6,9 @@ Evidence_*.zip
 test_*.txt
 transcript.txt
 
-# Local tools directory (populated by Update-Tools.ps1)
+# Local tools directories (populated by Update-Tools.ps1)
 tools/
+rules/
 
 # Temp/backup files
 *.tmp

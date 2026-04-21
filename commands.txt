@@ -25,8 +25,15 @@ Set-ExecutionPolicy -Scope Process Bypass
 # Kitchen sink (all features, network scan, threat hunt, RAM capture)
 .\Collect.ps1 -NetworkScan -CaptureRAM -ThreatHunt -ToolsPath "E:\tools" -OutputRoot "E:\"
 
-# Run targeted investigation script
-powershell -ExecutionPolicy Bypass -File .\Targeted-Investigation.ps1
+# ---- OPTIONAL TOOL BUNDLE ----
+
+# Download/refresh WinPmem, Chainsaw, Hayabusa, Sysinternals into .\tools:
+.\Update-Tools.ps1
+
+# ---- FORTIGATE CONFIG PARSING ----
+
+# Parse a FortiGate .conf backup into CSVs (policy, objects, admins, VPN):
+.\Parse-FortiGate.ps1 -InputFile ".\firewall-backup.conf" -OutputDir ".\fgt-parsed"
 
 # ---- REPORT CONVERSION ----
 

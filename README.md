@@ -6,8 +6,10 @@ Windows endpoint forensics and security audit toolkit for small-to-medium enviro
 
 | File | Description |
 |------|-------------|
-| `Collect.ps1` | Comprehensive endpoint evidence collector with CIS IG1 compliance checks. Gathers system info, logon events, processes, services, scheduled tasks, network state, Defender status/exclusions, browser history, USB history, Prefetch artifacts, WMI persistence, webcam access logs, and full CIS IG1 gap analysis. Outputs public IP for external scanning. Run as Administrator. |
+| `Collect.ps1` | Comprehensive endpoint evidence collector with CIS IG1 compliance checks. Gathers system info, logon events, processes, services, scheduled tasks, network state, Defender status/exclusions, browser history, USB history, Prefetch artifacts, WMI persistence, webcam access logs, AmCache/ShimCache/SRUM/Shellbags/UserAssist/BAM execution artifacts, Windows Timeline, LNK metadata, browser extensions, VSS shadows, Recycle Bin metadata, RDP client history, EDR/Sysmon/WSL detection, kernel drivers, DoH/ETW config, and full CIS IG1 gap analysis. Outputs public IP for external scanning. Run as Administrator. |
 | `convert-report.ps1` | Converts a markdown security assessment report to .docx. Runs Pandoc for the conversion, then applies Word COM post-processing: table borders, heading size/spacing/AllCaps, and gray italic disclaimer styling. Requires Pandoc and Microsoft Word. |
+| `Parse-FortiGate.ps1` | Parses a FortiGate configuration backup (`.conf` file) into structured CSVs for firewall policy, address objects, service objects, admin accounts, VPN config, and log settings. Use alongside `FortiGate-Export-Checklist.txt`. |
+| `Update-Tools.ps1` | Downloads and refreshes the optional external forensic tool bundle (WinPmem, Chainsaw + Sigma rules, Hayabusa, Sysinternals) into a local `tools\` directory for use with `-ToolsPath`, `-CaptureRAM`, and `-ThreatHunt`. Safe to re-run; idempotent. |
 | `Analysis-Prompt.txt` | AI analysis prompt for use with GitHub Copilot CLI or any capable AI assistant. Feed this file along with your evidence folder path to generate three standardized deliverables: (1) a security audit report with CIS IG1 compliance table, (2) a citation verification table mapping every claim to its evidence source, and (3) a one-page non-technical executive summary for the business owner. Also supports user-specific investigation reports. Includes document generation instructions and formatting rules. |
 | `CIS-IG1-Manual-Checklist.txt` | CIS Controls IG1 manual assessment checklist for items requiring interviews, document review, or access to non-endpoint systems (identity provider, firewall, backup platform). |
 | `FortiGate-Export-Checklist.txt` | On-site Fortinet FortiGate export checklist. Covers configuration backup, event logs, traffic logs, security logs, firewall policy review, VPN configuration, admin accounts, and log retention. |
@@ -89,6 +91,11 @@ Start with these files for a rapid assessment:
 | `13b_prefetch_FLAGGED.csv` | Attack tools that were executed (if any) |
 | `13c_wmi_persistence.csv` | Stealthy WMI persistence (if any) |
 | `18_cis_secure_config.json` | SMBv1/LLMNR/NetBIOS status |
+| `20_AmCache.hve` + `20_ShimCache.reg` | Execution evidence (survives Prefetch wipe) |
+| `20_SRUDB.dat` + `20_SOFTWARE.hive` | Per-app network bytes sent/received (30-60 days) |
+| `20_Shellbags.reg` / `20_UserAssist.reg` / `20_BAM.reg` | Activity timeline artifacts |
+| `20_drivers_UNSIGNED_FLAGGED.csv` | Unsigned kernel drivers (if any) |
+| `20_EDR_detected.csv` | Third-party EDR/AV product detection |
 
 Review all files with `_FLAGGED`, `_SUSPICIOUS`, or `_UNEXPECTED` suffixes as priority items.
 

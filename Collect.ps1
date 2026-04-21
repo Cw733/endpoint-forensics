@@ -206,6 +206,27 @@ OUTPUT FILES (key files -- full list in _collection_log.txt)
   18_cis_screen_lock.json       Screen lock / inactivity timeout (CIS 4.3)
   18_cis_audit_log_sizes.json   Event log size and retention (CIS 8.3)
   18_cis_ps_logging.json        PowerShell logging policy (CIS 8.5)
+  20_AmCache.hve                Execution evidence (every EXE run; survives Prefetch wipe)
+  20_ShimCache.reg              AppCompatCache (execution history, registry-based)
+  20_SRUDB.dat + 20_SOFTWARE    SRUM: per-app network bytes sent/received (30-60 days)
+  20_Shellbags.reg              Every folder navigated (incl. detached USB paths)
+  20_UserAssist.reg             GUI program launch counts + last-run times (ROT13)
+  20_BAM.reg                    Last-execution timestamps per user per EXE
+  20_user_<name>\               Per-user: ActivitiesCache, LNK_Recent.csv,
+                                BrowserExtensions.csv, Downloads_Inventory.csv,
+                                RDP_Client_History.csv, CredentialManager.txt
+  20_VSS_shadows.txt            Volume Shadow Copy list (ransomware IOC if deleted)
+  20_recycle_bin_index.csv      Recycle Bin $I metadata (deleted file paths + times)
+  20_pfirewall.log              Firewall log (if enabled; historical connections)
+  20_scheduled_tasks_full.xml   Full Action/Trigger XML for every scheduled task
+  20_EDR_detected.csv           Third-party EDR/AV products detected
+  20_sysmon_status.json         Sysmon presence + event count
+  20_wsl_distros.txt            WSL distros (if any -- AV-evasion vector)
+  20_drivers.csv                All kernel drivers (20_drivers_UNSIGNED_FLAGGED if any)
+  20_DoH_config.json            DNS-over-HTTPS client config (C2 evasion vector)
+  20_ETW_sessions.txt           Live ETW tracing sessions (rootkit / monitoring)
+  20_ETW_autologgers.reg        Boot-time persistent ETW autologger configs
+  20_sessions.txt               Current local + RDP sessions (qwinsta)
   network_scan\network_summary  Per-host triage results (with -NetworkScan)
 
   All files marked _FLAGGED, _SUSPICIOUS, or _UNEXPECTED are priority review.
@@ -2902,6 +2923,407 @@ if ($trEnabled -eq 1) {
 }
 
 End-Section   # close CIS secure configuration section
+
+# --- Execution & Activity Artifacts ------------------------------------------
+# High-value forensic artifacts that survive Prefetch/log tampering: AmCache,
+# ShimCache, SRUM, Shellbags, UserAssist, ActivitiesCache, LNK metadata,
+# browser extensions, VSS, recycle bin, firewall log, RDP history, credential
+# manager names, scheduled task XML, EDR/Sysmon/WSL presence, drivers, BAM,
+# Office trust records, DoH, ETW sessions, autologgers, downloads, sessions.
+
+Start-Section "EXECUTION & ACTIVITY ARTIFACTS" "AmCache, ShimCache, SRUM, Shellbags, UserAssist, ActivitiesCache, LNK, browser ext, VSS, recycle bin, RDP history, drivers, BAM, Office trust, DoH, ETW, sessions"
+
+# -- AmCache.hve (proves every EXE that ran, even without Prefetch) --------
+try {
+    $amcacheSrc = "C:\Windows\AppCompat\Programs\Amcache.hve"
+    if (Test-Path $amcacheSrc) {
+        $amcacheOut = "$OutputPath\20_AmCache.hve"
+        & reg.exe save 'HKLM\AmCacheTemp' $amcacheOut /y 2>$null | Out-Null
+        if (-not (Test-Path $amcacheOut)) {
+            # Fallback: direct copy (may fail if locked)
+            Copy-Item $amcacheSrc $amcacheOut -Force -ErrorAction SilentlyContinue
+        }
+        if (Test-Path $amcacheOut) {
+            Log "  Saved: 20_AmCache.hve (parse with AmcacheParser or RegRipper)"
+        } else {
+            Log "  AmCache.hve could not be copied (locked)" "DarkGray"
+        }
+    }
+} catch { Log "  AmCache copy error: $_" "DarkGray" }
+
+# -- ShimCache (AppCompatCache registry value) ------------------------------
+try {
+    $shimOut = "$OutputPath\20_ShimCache.reg"
+    & reg.exe export 'HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\AppCompatCache' $shimOut /y 2>$null | Out-Null
+    if (Test-Path $shimOut) { Log "  Saved: 20_ShimCache.reg (parse with AppCompatCacheParser)" }
+} catch { Log "  ShimCache export error: $_" "DarkGray" }
+
+# -- SRUM (per-app network bytes sent/received, 30-60 day history) ---------
+try {
+    $srumSrc = "C:\Windows\System32\sru\SRUDB.dat"
+    if (Test-Path $srumSrc) {
+        Copy-Item $srumSrc "$OutputPath\20_SRUDB.dat" -Force -ErrorAction SilentlyContinue
+        $softSrc = "C:\Windows\System32\config\SOFTWARE"
+        $softOut = "$OutputPath\20_SOFTWARE.hive"
+        & reg.exe save 'HKLM\SOFTWARE' $softOut /y 2>$null | Out-Null
+        if (Test-Path "$OutputPath\20_SRUDB.dat") {
+            $srumSize = [math]::Round((Get-Item "$OutputPath\20_SRUDB.dat").Length / 1MB, 1)
+            Log "  Saved: 20_SRUDB.dat (${srumSize}MB) + 20_SOFTWARE.hive (parse with srum-dump / SrumECmd)"
+        } else {
+            Log "  SRUDB.dat locked; use VSS or offline collection for parse" "DarkGray"
+        }
+    }
+} catch { Log "  SRUM copy error: $_" "DarkGray" }
+
+# -- Shellbags (every folder navigated, including detached USB paths) ------
+try {
+    $sbOut = "$OutputPath\20_Shellbags.reg"
+    & reg.exe export 'HKCU\SOFTWARE\Microsoft\Windows\Shell' $sbOut /y 2>$null | Out-Null
+    if (Test-Path $sbOut) { Log "  Saved: 20_Shellbags.reg (parse with ShellBagsExplorer)" }
+} catch { Log "  Shellbags export error: $_" "DarkGray" }
+
+# -- UserAssist (GUI program launch counts + last run, ROT13 encoded) -------
+try {
+    $uaOut = "$OutputPath\20_UserAssist.reg"
+    & reg.exe export 'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist' $uaOut /y 2>$null | Out-Null
+    if (Test-Path $uaOut) { Log "  Saved: 20_UserAssist.reg (ROT13-encoded; parse with RegRipper userassist.pl)" }
+} catch { Log "  UserAssist export error: $_" "DarkGray" }
+
+# -- BAM (Background Activity Moderator -- last-exec per user per EXE) -----
+try {
+    $bamOut = "$OutputPath\20_BAM.reg"
+    & reg.exe export 'HKLM\SYSTEM\CurrentControlSet\Services\bam\State\UserSettings' $bamOut /y 2>$null | Out-Null
+    if (-not (Test-Path $bamOut)) {
+        & reg.exe export 'HKLM\SYSTEM\CurrentControlSet\Services\bam\UserSettings' $bamOut /y 2>$null | Out-Null
+    }
+    if (Test-Path $bamOut) { Log "  Saved: 20_BAM.reg (last-execution timestamps per SID/EXE)" }
+} catch { Log "  BAM export error: $_" "DarkGray" }
+
+# -- Per-user artifacts: ActivitiesCache, LNK, browser extensions, Office --
+foreach ($p in $profiles) {
+    $userName = $p.Name
+    $userDir  = $p.FullName
+    $safeUser = ($userName -replace '[^\w]', '_')
+    $userOut  = "$OutputPath\20_user_$safeUser"
+    if (-not (Test-Path $userOut)) { New-Item -ItemType Directory -Path $userOut -Force | Out-Null }
+
+    # Windows Timeline / ActivitiesCache.db (SQLite -- apps/docs/sites used)
+    $acGlob = Get-ChildItem "$userDir\AppData\Local\ConnectedDevicesPlatform" -Directory -ErrorAction SilentlyContinue
+    foreach ($acDir in $acGlob) {
+        $acDb = Join-Path $acDir.FullName "ActivitiesCache.db"
+        if (Test-Path $acDb) {
+            Copy-Item $acDb "$userOut\ActivitiesCache_$($acDir.Name).db" -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    # LNK parsing of Recent folder (target path + MAC times via WScript.Shell)
+    $recentDir = "$userDir\AppData\Roaming\Microsoft\Windows\Recent"
+    if (Test-Path $recentDir) {
+        $lnkReport = @()
+        try {
+            $shell = New-Object -ComObject WScript.Shell
+            Get-ChildItem $recentDir -Filter "*.lnk" -ErrorAction SilentlyContinue | ForEach-Object {
+                try {
+                    $sc = $shell.CreateShortcut($_.FullName)
+                    $lnkReport += [PSCustomObject]@{
+                        LnkFile        = $_.Name
+                        LnkCreated     = $_.CreationTime
+                        LnkModified    = $_.LastWriteTime
+                        TargetPath     = $sc.TargetPath
+                        Arguments      = $sc.Arguments
+                        WorkingDir     = $sc.WorkingDirectory
+                        TargetExists   = (Test-Path $sc.TargetPath -ErrorAction SilentlyContinue)
+                    }
+                } catch {}
+            }
+            [System.Runtime.Interopservices.Marshal]::ReleaseComObject($shell) | Out-Null
+        } catch {}
+        if ($lnkReport) {
+            $lnkReport | Export-Csv "$userOut\LNK_Recent.csv" -NoTypeInformation -Encoding UTF8
+        }
+    }
+
+    # Browser extensions inventory (Chrome/Edge/Brave -- manifest.json per ext)
+    $extReport = @()
+    $extBrowsers = @{
+        "Chrome" = "$userDir\AppData\Local\Google\Chrome\User Data"
+        "Edge"   = "$userDir\AppData\Local\Microsoft\Edge\User Data"
+        "Brave"  = "$userDir\AppData\Local\BraveSoftware\Brave-Browser\User Data"
+    }
+    foreach ($bName in $extBrowsers.Keys) {
+        $udRoot = $extBrowsers[$bName]
+        if (-not (Test-Path $udRoot)) { continue }
+        $profDirs = Get-ChildItem $udRoot -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -eq "Default" -or $_.Name -match "^Profile \d+$" }
+        foreach ($pd in $profDirs) {
+            $extRoot = Join-Path $pd.FullName "Extensions"
+            if (-not (Test-Path $extRoot)) { continue }
+            Get-ChildItem $extRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+                $extId = $_.Name
+                Get-ChildItem $_.FullName -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+                    $manifest = Join-Path $_.FullName "manifest.json"
+                    if (Test-Path $manifest) {
+                        try {
+                            $m = Get-Content $manifest -Raw -ErrorAction Stop | ConvertFrom-Json
+                            $extReport += [PSCustomObject]@{
+                                Browser     = $bName
+                                BrowserProf = $pd.Name
+                                ExtensionID = $extId
+                                Version     = $_.Name
+                                Name        = $m.name
+                                Description = $m.description
+                                Permissions = ($m.permissions -join '; ')
+                                HostPerms   = ($m.host_permissions -join '; ')
+                                UpdateURL   = $m.update_url
+                                Installed   = $_.CreationTime
+                            }
+                        } catch {}
+                    }
+                }
+            }
+        }
+    }
+    if ($extReport) {
+        $extReport | Export-Csv "$userOut\BrowserExtensions.csv" -NoTypeInformation -Encoding UTF8
+    }
+
+    # Office Trust Records / Trusted Documents / Recent files (macro-abuse IOC)
+    $hkuHive = "HKEY_USERS"
+    # Use reg query on NTUSER.DAT-mounted hive if not current user, else HKCU
+    $isCurrentUser = ($userName -ieq $env:USERNAME)
+    if ($isCurrentUser) {
+        $offOut = "$userOut\Office.reg"
+        & reg.exe export 'HKCU\Software\Microsoft\Office' $offOut /y 2>$null | Out-Null
+        if (-not (Test-Path $offOut) -or (Get-Item $offOut -ErrorAction SilentlyContinue).Length -lt 1KB) {
+            Remove-Item $offOut -ErrorAction SilentlyContinue
+        }
+    }
+
+    # RDP client history (hosts this user RDP'd to)
+    if ($isCurrentUser) {
+        $rdpServersKey = "HKCU:\Software\Microsoft\Terminal Server Client\Servers"
+        $rdpDefaultKey = "HKCU:\Software\Microsoft\Terminal Server Client\Default"
+        $rdpHistory = @()
+        if (Test-Path $rdpServersKey) {
+            Get-ChildItem $rdpServersKey -ErrorAction SilentlyContinue | ForEach-Object {
+                $v = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+                $rdpHistory += [PSCustomObject]@{
+                    RemoteHost    = $_.PSChildName
+                    UsernameHint  = $v.UsernameHint
+                    CertHash      = $v.'CertHash'
+                }
+            }
+        }
+        if (Test-Path $rdpDefaultKey) {
+            $def = Get-ItemProperty $rdpDefaultKey -ErrorAction SilentlyContinue
+            $def.PSObject.Properties | Where-Object { $_.Name -match '^MRU' } | ForEach-Object {
+                $rdpHistory += [PSCustomObject]@{
+                    RemoteHost   = $_.Value
+                    UsernameHint = "(from Default\$($_.Name))"
+                    CertHash     = ""
+                }
+            }
+        }
+        if ($rdpHistory) {
+            $rdpHistory | Export-Csv "$userOut\RDP_Client_History.csv" -NoTypeInformation -Encoding UTF8
+        }
+
+        # Cached Credential Manager entries (names only, never values)
+        try {
+            $cm = & cmdkey.exe /list 2>&1
+            Set-Content "$userOut\CredentialManager.txt" -Value ($cm | Out-String) -Encoding UTF8
+        } catch {}
+    }
+
+    # Downloads folder inventory (separate from >50MB scan)
+    $dlDir = "$userDir\Downloads"
+    if (Test-Path $dlDir) {
+        try {
+            Get-ChildItem $dlDir -File -Recurse -ErrorAction SilentlyContinue |
+                Select-Object FullName, Length, CreationTime, LastWriteTime,
+                    @{N='SizeMB';E={[math]::Round($_.Length/1MB,2)}} |
+                Sort-Object CreationTime -Descending |
+                Export-Csv "$userOut\Downloads_Inventory.csv" -NoTypeInformation -Encoding UTF8
+        } catch {}
+    }
+}
+Log "  Per-user artifacts (ActivitiesCache, LNK, extensions, Office, RDP hist, Downloads) saved to 20_user_*"
+
+# -- Volume Shadow Copies (ransomware IOC if deleted; gold if present) -----
+try {
+    $vss = & vssadmin.exe list shadows 2>&1
+    Set-Content "$OutputPath\20_VSS_shadows.txt" -Value ($vss | Out-String) -Encoding UTF8
+    $shadowCount = ($vss | Select-String "Shadow Copy ID:" | Measure-Object).Count
+    Log "  Saved: 20_VSS_shadows.txt ($shadowCount shadow copies found)"
+} catch { Log "  vssadmin query error: $_" "DarkGray" }
+
+# -- Recycle Bin $I metadata files (deleted-file paths + timestamps) -------
+try {
+    $rbOut = "$OutputPath\20_recycle_bin_I_files"
+    $rbReport = @()
+    Get-ChildItem "C:\`$Recycle.Bin" -Force -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        $sid = $_.Name
+        Get-ChildItem $_.FullName -Force -Filter '$I*' -ErrorAction SilentlyContinue | ForEach-Object {
+            if (-not (Test-Path $rbOut)) { New-Item -ItemType Directory -Path $rbOut -Force | Out-Null }
+            $destName = "${sid}__$($_.Name)"
+            Copy-Item $_.FullName "$rbOut\$destName" -Force -ErrorAction SilentlyContinue
+            $rbReport += [PSCustomObject]@{
+                SID      = $sid
+                FileName = $_.Name
+                Size     = $_.Length
+                Deleted  = $_.LastWriteTime
+            }
+        }
+    }
+    if ($rbReport) {
+        $rbReport | Export-Csv "$OutputPath\20_recycle_bin_index.csv" -NoTypeInformation -Encoding UTF8
+        Log "  Saved: 20_recycle_bin_index.csv ($($rbReport.Count) `$I metadata records; copies in 20_recycle_bin_I_files\)"
+    } else {
+        Log "  Recycle Bin: no `$I metadata files found" "DarkGray"
+    }
+} catch { Log "  Recycle Bin enumeration error: $_" "DarkGray" }
+
+# -- Firewall log file (actual historical connection log, if logging is on) -
+$fwLogPath = "C:\Windows\System32\LogFiles\Firewall\pfirewall.log"
+if (Test-Path $fwLogPath) {
+    try {
+        Copy-Item $fwLogPath "$OutputPath\20_pfirewall.log" -Force -ErrorAction SilentlyContinue
+        $fwSize = [math]::Round((Get-Item "$OutputPath\20_pfirewall.log").Length / 1MB, 2)
+        Log "  Saved: 20_pfirewall.log (${fwSize}MB)"
+    } catch {}
+} else {
+    Log "  Firewall log file not present (firewall logging is not enabled)" "DarkGray"
+}
+
+# -- Scheduled Tasks full XML export (Actions + Triggers detail) ------------
+try {
+    $staskXml = & schtasks.exe /query /xml ONE 2>$null
+    if ($staskXml) {
+        Set-Content "$OutputPath\20_scheduled_tasks_full.xml" -Value ($staskXml | Out-String) -Encoding UTF8
+        Log "  Saved: 20_scheduled_tasks_full.xml (full Action/Trigger detail for all tasks)"
+    }
+} catch { Log "  schtasks XML export error: $_" "DarkGray" }
+
+# -- EDR / third-party security product detection ---------------------------
+$edrSignatures = @{
+    "SentinelOne"         = @("SentinelAgent","SentinelHelperService","LogProcessorService")
+    "CrowdStrike Falcon"  = @("CSFalconService","CSAgent","csfalconservice")
+    "Carbon Black"        = @("CbDefense","cbdefense","CarbonBlack")
+    "Huntress"            = @("HuntressAgent","HuntressUpdater")
+    "Sophos"              = @("Sophos MCS Agent","SophosAgent","SAVService")
+    "Cybereason"          = @("CybereasonActiveProbe","CybereasonRansomFree")
+    "Cylance"             = @("CylanceSvc","CylanceUI")
+    "Trend Micro"         = @("Amsp","TmPfw","TmListen","ds_agent")
+    "McAfee"              = @("McAfeeFramework","mfemms","mfevtp")
+    "Bitdefender"         = @("EPSecurityService","UPDATESRV")
+    "ESET"                = @("ekrn","EraAgentSvc")
+    "Kaspersky"           = @("klnagent","avp")
+    "Malwarebytes"        = @("MBAMService")
+    "Webroot"             = @("WRSVC")
+    "Symantec"            = @("ccSvcHst","SepMasterService","SNAC")
+    "Microsoft Defender for Endpoint" = @("Sense","WdNisSvc","MsSense")
+    "Arctic Wolf"         = @("ArcticWolfAgent")
+    "Red Canary"          = @("rcagent")
+}
+$svcs = Get-Service -ErrorAction SilentlyContinue
+$edrFound = @()
+foreach ($vendor in $edrSignatures.Keys) {
+    foreach ($svcName in $edrSignatures[$vendor]) {
+        $match = $svcs | Where-Object { $_.Name -ieq $svcName -or $_.DisplayName -ilike "*$svcName*" }
+        if ($match) {
+            $edrFound += [PSCustomObject]@{
+                Vendor  = $vendor
+                Service = $match[0].Name
+                Display = $match[0].DisplayName
+                Status  = $match[0].Status
+            }
+        }
+    }
+}
+if ($edrFound) {
+    $edrFound | Export-Csv "$OutputPath\20_EDR_detected.csv" -NoTypeInformation -Encoding UTF8
+    Log "  EDR/AV products detected: $(($edrFound | Select-Object -ExpandProperty Vendor -Unique) -join ', ')"
+} else {
+    Log "  No third-party EDR services detected (Windows Defender only)" "DarkGray"
+}
+
+# -- Sysmon presence + operational log event count ---------------------------
+$sysmonSvc = Get-Service -Name "Sysmon*" -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($sysmonSvc) {
+    $sysmonLog = Get-WinEvent -ListLog "Microsoft-Windows-Sysmon/Operational" -ErrorAction SilentlyContinue
+    $sysmonInfo = [ordered]@{
+        ServiceName  = $sysmonSvc.Name
+        Status       = "$($sysmonSvc.Status)"
+        LogPresent   = [bool]$sysmonLog
+        LogSize      = if ($sysmonLog) { [math]::Round($sysmonLog.FileSize/1MB,1) } else { 0 }
+        RecordCount  = if ($sysmonLog) { $sysmonLog.RecordCount } else { 0 }
+    }
+    $sysmonInfo | ConvertTo-Json | Set-Content "$OutputPath\20_sysmon_status.json" -Encoding UTF8
+    Log "  Sysmon detected: $($sysmonSvc.Name) ($($sysmonInfo.RecordCount) events)"
+} else {
+    Log "  Sysmon not installed" "DarkGray"
+}
+
+# -- WSL distributions (AV-evasion vector) -----------------------------------
+try {
+    $wsl = & wsl.exe --list --verbose 2>&1
+    if ($LASTEXITCODE -eq 0 -and $wsl) {
+        Set-Content "$OutputPath\20_wsl_distros.txt" -Value ($wsl | Out-String) -Encoding UTF8
+        Log "  Saved: 20_wsl_distros.txt"
+    } else {
+        Log "  WSL not installed / no distros registered" "DarkGray"
+    }
+} catch { Log "  WSL query error: $_" "DarkGray" }
+
+# -- Kernel drivers (unsigned / third-party = BYOVD rootkit surface) --------
+try {
+    $drvOut = "$OutputPath\20_drivers.csv"
+    & driverquery.exe /fo csv /si 2>$null | Set-Content $drvOut -Encoding UTF8
+    if (Test-Path $drvOut) {
+        $drvTable = Import-Csv $drvOut -ErrorAction SilentlyContinue
+        $unsigned = $drvTable | Where-Object { $_.'IsSigned' -eq 'FALSE' }
+        if ($unsigned) {
+            $unsigned | Export-Csv "$OutputPath\20_drivers_UNSIGNED_FLAGGED.csv" -NoTypeInformation -Encoding UTF8
+            Log "  *** $($unsigned.Count) UNSIGNED kernel drivers -- see 20_drivers_UNSIGNED_FLAGGED.csv ***" "DarkYellow"
+        } else {
+            Log "  Saved: 20_drivers.csv (all drivers signed)"
+        }
+    }
+} catch { Log "  driverquery error: $_" "DarkGray" }
+
+# -- DNS-over-HTTPS (DoH) client configuration ------------------------------
+$dohState = [ordered]@{}
+$dohKey = "HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters"
+$dohProp = Get-ItemProperty $dohKey -ErrorAction SilentlyContinue
+$dohState.EnableAutoDoh = $dohProp.EnableAutoDoh
+$dohState.DohFlags      = $dohProp.DohFlags
+$dohTemplates = Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\DohWellKnownServers\*" -ErrorAction SilentlyContinue
+$dohState.WellKnownServers = @($dohTemplates | Select-Object -ExpandProperty PSChildName -ErrorAction SilentlyContinue)
+$dohState | ConvertTo-Json | Set-Content "$OutputPath\20_DoH_config.json" -Encoding UTF8
+Log "  Saved: 20_DoH_config.json"
+
+# -- ETW live sessions (catches stealth monitoring / rootkits) --------------
+try {
+    $etw = & logman.exe query -ets 2>&1
+    Set-Content "$OutputPath\20_ETW_sessions.txt" -Value ($etw | Out-String) -Encoding UTF8
+    Log "  Saved: 20_ETW_sessions.txt"
+} catch {}
+
+# -- ETW AutoLogger configurations (persistent boot-time tracing) -----------
+try {
+    $alOut = "$OutputPath\20_ETW_autologgers.reg"
+    & reg.exe export 'HKLM\SYSTEM\CurrentControlSet\Control\WMI\Autologger' $alOut /y 2>$null | Out-Null
+    if (Test-Path $alOut) { Log "  Saved: 20_ETW_autologgers.reg" }
+} catch {}
+
+# -- Active sessions (local + RDP) ------------------------------------------
+try {
+    $sess = & qwinsta.exe 2>&1
+    Set-Content "$OutputPath\20_sessions.txt" -Value ($sess | Out-String) -Encoding UTF8
+    Log "  Saved: 20_sessions.txt"
+} catch {}
+
+End-Section
 
 # --- Summary JSON Files -------------------------------------------------------
 
