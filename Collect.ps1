@@ -526,7 +526,10 @@ function Log {
     param([string]$msg, [string]$color = "Cyan")
     $entry = "[$(Get-Date -Format 'HH:mm:ss')] $msg"
     Write-Host $entry -ForegroundColor $color
-    Add-Content -Path $logFile -Value $entry
+    # Log file may have been deleted after sanitization; silently skip in that case
+    if ($logFile -and (Test-Path -LiteralPath (Split-Path -Parent $logFile))) {
+        Add-Content -Path $logFile -Value $entry -ErrorAction SilentlyContinue
+    }
 }
 
 $script:_secStart = $null
@@ -767,7 +770,7 @@ else { Log "  01_gpo_rsop.txt not created (skipped or failed)" "DarkGray" }
 # Note: Get-WindowsOptionalFeature -Online requires Admin and may prompt for UAC.
 # Use DISM.exe as a more robust alternative that fails gracefully if not admin.
 try {
-    $dismOut = DISM.exe /online /get-features /format:brief 2>&1 | Where-Object { $_ }
+    $dismOut = DISM.exe /online /get-features /english 2>&1 | Where-Object { $_ }
     # DISM prints "Error: 740" + "Elevated permissions are required" when not admin.
     # Match specifically on that, not any substring of "Error" (feature names can contain it).
     if ($LASTEXITCODE -ne 0 -or ($dismOut -join "`n") -match 'Error:\s*\d+|Elevated permissions are required') {
