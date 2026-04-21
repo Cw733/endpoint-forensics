@@ -536,6 +536,20 @@ FORMATTING RULES:
    - Appendix
    - [Disclaimer / Legal Notice in blockquote at very end]
 
+8. SECTION SPACING: Insert a &nbsp; (non-breaking space) paragraph between
+   each ## level section heading to create visual breathing room in the
+   Word output. Format as:
+
+       [last line of section content]
+
+       &nbsp;
+
+       ## NEXT SECTION HEADING
+
+   The blank lines around &nbsp; are required for pandoc to treat it as a
+   standalone paragraph rather than inline content. Apply this to both the
+   main report and the executive summary.
+
 ==========================================================================
   PART 4: INVESTIGATION REPORT FORMAT (user-specific findings)
 ==========================================================================
@@ -853,5 +867,89 @@ It should be professional, organized by report section, and complete.
 If the table shows 100% VERIFIED with zero INCORRECT, it provides
 confidence that the report is factually accurate. Any CAVEAT or
 UNVERIFIED items should be reviewed by the analyst before delivery.
+
+==========================================================================
+  PART 10: EXECUTIVE SUMMARY DOCUMENT (MANDATORY COMPANION)
+==========================================================================
+
+Every security assessment MUST produce THREE deliverables:
+  1. [ClientName]-CIS-IG1-Security-Assessment.md    -- Main technical report
+  2. [ClientName]-Citation-Verification.md          -- Fact-check artifact
+  3. [ClientName]-Executive-Summary.md              -- Non-technical summary
+
+The executive summary is a SEPARATE document, not the executive summary
+section within the main report. It stands alone and is suitable for delivery
+to non-technical stakeholders: owners, board members, and regulators.
+
+--------------------------------------------------------------------------
+EXECUTIVE SUMMARY DOCUMENT REQUIREMENTS:
+--------------------------------------------------------------------------
+
+LENGTH: One page (approximately 600-900 words of body text).
+
+AUDIENCE: Non-technical. Assume the reader has no IT background.
+  - No technical jargon without plain-English explanation
+  - No IP addresses, registry paths, firmware versions, or CVE numbers
+  - Replace technical terms with accessible analogies where helpful
+
+CONTENT STRUCTURE:
+  1. Header block: Prepared By, Assessment Date, Classification
+     (each field on its own line, separated by blank lines in markdown
+     so each renders as its own paragraph in Word)
+  2. What We Found (2-3 sentence summary -- include "no breach detected" if true)
+  3. The Issues That Matter Most (focus on 3-7 highest-severity findings)
+     For each issue:
+     - Plain-English title (not a finding code)
+     - 2-4 sentence description of the problem and why it exists
+     - "What could happen:" paragraph describing a realistic attack scenario
+  4. The Good News (positive findings -- only include if factually supported)
+  5. Recommended First Steps (priority table: Priority | Action | Why It Matters)
+  6. Disclaimer (italicized, note that this is not a formal audit)
+
+CITATION REQUIREMENTS -- SAME STANDARD AS THE MAIN REPORT:
+  All claims in the executive summary must be directly traceable to a
+  specific finding in the main technical report. The same rules from
+  Part 8 apply:
+  - Every factual claim must come from evidence, not inference or assumption
+  - Do NOT introduce new findings in the exec summary that are not in the report
+  - Do NOT state quantitative claims (counts, percentages, dates) that are not
+    in the main report
+  - Do NOT soften or overstate severity relative to the main report findings
+  - Positive claims ("no breach detected", "antivirus active") must be
+    supported by the main report's threat sweep and findings sections
+  - "What could happen" scenarios must be realistic and consistent with the
+    actual findings -- do not describe attacks the evidence does not support
+
+  After generating the exec summary, perform the same two-pass verification
+  used for the main report (Part 8, Rule 5). For each claim, identify the
+  corresponding section or finding number in the main report that supports it.
+
+FORMATTING RULES (same as main report):
+  - No horizontal rules (---)
+  - No finding codes (F-01, F-11, etc.) -- use plain-English titles
+  - &nbsp; spacer lines between major ## sections (see Formatting Rule 8)
+  - Metadata fields separated by blank lines so each renders as its
+    own paragraph in Word (not inline)
+  - Bold key phrases within paragraphs to aid skimming
+  - Table for remediation priorities
+  - No Unicode symbols (no checkmarks, no arrows, no bullets beyond hyphens)
+
+COMMON ERRORS TO AVOID:
+  - Do not claim issues affect systems or networks they do not affect
+    (e.g., do not say cameras share a network with SCADA if they are on
+    physically separate networks -- verify the topology from the main report)
+  - Do not make regulatory or legal claims you cannot support
+    ("regulators may fine", "cyber insurance will be denied")
+  - Do not say "most can be fixed at low cost" without knowing the costs
+  - Do not include internal filenames or document names in the disclaimer
+  - Do not conflate severity levels -- if an issue is HIGH (not CRITICAL),
+    do not describe it as the most critical item unless context justifies it
+
+DOCUMENT GENERATION:
+  Convert to .docx using the same pandoc command as the main report:
+    pandoc "exec-summary.md" -o "exec-summary.docx" \
+      --reference-doc "reference-style.docx"
+
+  Use the same reference-style.docx template for visual consistency.
 
 ==========================================================================

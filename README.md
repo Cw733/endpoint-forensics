@@ -8,7 +8,7 @@ Windows endpoint forensics and security audit toolkit for small-to-medium enviro
 |------|-------------|
 | `Collect.ps1` | Comprehensive endpoint evidence collector with CIS IG1 compliance checks. Gathers system info, logon events, processes, services, scheduled tasks, network state, Defender status/exclusions, browser history, USB history, Prefetch artifacts, WMI persistence, webcam access logs, and full CIS IG1 gap analysis. Outputs public IP for external scanning. Run as Administrator. |
 | `convert-report.ps1` | Converts a markdown security assessment report to .docx. Runs Pandoc for the conversion, then applies Word COM post-processing: table borders, heading size/spacing/AllCaps, and gray italic disclaimer styling. Requires Pandoc and Microsoft Word. |
-| `Analysis-Prompt.txt` | AI analysis prompt for use with GitHub Copilot CLI or any capable AI assistant. Feed this file along with your evidence folder path to generate a standardized security audit report with CIS IG1 compliance table, or a user-specific investigation report. Includes document generation instructions and formatting rules. |
+| `Analysis-Prompt.txt` | AI analysis prompt for use with GitHub Copilot CLI or any capable AI assistant. Feed this file along with your evidence folder path to generate three standardized deliverables: (1) a security audit report with CIS IG1 compliance table, (2) a citation verification table mapping every claim to its evidence source, and (3) a one-page non-technical executive summary for the business owner. Also supports user-specific investigation reports. Includes document generation instructions and formatting rules. |
 | `CIS-IG1-Manual-Checklist.txt` | CIS Controls IG1 manual assessment checklist for items requiring interviews, document review, or access to non-endpoint systems (identity provider, firewall, backup platform). |
 | `FortiGate-Export-Checklist.txt` | On-site Fortinet FortiGate export checklist. Covers configuration backup, event logs, traffic logs, security logs, firewall policy review, VPN configuration, admin accounts, and log retention. |
 | `commands.txt` | Quick-reference commands for running the collection and conversion scripts. |
@@ -98,7 +98,10 @@ Review all files with `_FLAGGED`, `_SUSPICIOUS`, or `_UNEXPECTED` suffixes as pr
 2. Feed it `Analysis-Prompt.txt` as context
 3. Say: `"I have an evidence folder from Collect.ps1 at [path]. Generate a security audit report following the instructions in the prompt file."`
 4. For an investigation report: `"Also generate an investigation findings report for user [username]."`
-5. The AI will read the evidence files and produce a report with a full CIS IG1 compliance table.
+5. The AI will read the evidence files and produce three deliverables:
+   - **Main report** (`[Client]-CIS-IG1-Security-Assessment.md`) -- full technical findings with CIS IG1 compliance table
+   - **Citation verification table** (`[Client]-Citation-Verification.md`) -- maps every factual claim to its evidence source
+   - **Executive summary** (`[Client]-Executive-Summary.md`) -- one-page, non-technical summary suitable for the business owner or board; same citation standards as the main report
 
 Browser history `.db` files (SQLite) can be opened with [DB Browser for SQLite](https://sqlitebrowser.org).
 
