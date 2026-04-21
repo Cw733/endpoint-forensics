@@ -2846,24 +2846,33 @@ $secConfigReport | ConvertTo-Json | Set-Content "$OutputPath\18_cis_secure_confi
 $screenLockTimeout = $null
 $screenLockSecure  = $null
 
-# Check per-user screensaver settings first (highest precedence is group policy applied via gpsync)
+# Check multiple registry locations for screen timeout (in order of precedence):
+# 1. Per-user screensaver timeout (HKCU\Control Panel\Desktop\ScreenSaveTimeOut)
+# 2. Group Policy applied inactivity timeout (HKLM\...\Policies\System\InactivityTimeoutSecs)
+# 3. Group Policy applied lock delay (HKCU\Control Panel\Desktop\DelayLockInterval)
 $ssTimeout = (Get-ItemProperty "HKCU:\Control Panel\Desktop" -ErrorAction SilentlyContinue).ScreenSaveTimeOut
-$ssSecure  = (Get-ItemProperty "HKCU:\Control Panel\Desktop" -ErrorAction SilentlyContinue).ScreenSaverIsSecure
-
-# Also check the group policy applied value (effectiveInactivityTimeout reflects actual applied policy)
 $inactivityKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"
 $inactivityTimeout = (Get-ItemProperty $inactivityKey -ErrorAction SilentlyContinue).InactivityTimeoutSecs
+$delayLockInterval = (Get-ItemProperty "HKCU:\Control Panel\Desktop" -ErrorAction SilentlyContinue).DelayLockInterval
 
 # Use whichever is more restrictive (smaller timeout = more restrictive)
-if ($inactivityTimeout -and $ssTimeout) {
-    $screenLockTimeout = [math]::Min([int]$inactivityTimeout, [int]$ssTimeout)
-} elseif ($inactivityTimeout) {
-    $screenLockTimeout = [int]$inactivityTimeout
-} elseif ($ssTimeout) {
-    $screenLockTimeout = [int]$ssTimeout
+# Collect all non-null values and use the minimum
+$timeoutValues = @()
+if ($ssTimeout) { $timeoutValues += $ssTimeout }
+if ($inactivityTimeout) { $timeoutValues += $inactivityTimeout }
+if ($delayLockInterval) { $timeoutValues += $delayLockInterval }
+
+if ($timeoutValues.Count -gt 1) {
+    $screenLockTimeout = ($timeoutValues | Measure-Object -Minimum).Minimum
+} elseif ($timeoutValues.Count -eq 1) {
+    $screenLockTimeout = $timeoutValues[0]
 }
 
-$screenLockSecure = ($ssSecure -eq "1") -or ($screenLockTimeout -and $screenLockTimeout -gt 0)
+# Check screensaver password requirement in both per-user and group policy locations
+$ssSecureUser = (Get-ItemProperty "HKCU:\Control Panel\Desktop" -ErrorAction SilentlyContinue).ScreenSaverIsSecure
+$ssSecureGPO = (Get-ItemProperty "HKCU:\Software\Policies\Microsoft\Windows\Control Panel\Desktop" -ErrorAction SilentlyContinue).ScreenSaverIsSecure
+# Either user setting or GPO setting = 1 means secure
+$screenLockSecure = (($ssSecureUser -eq "1" -or $ssSecureUser -eq 1) -or ($ssSecureGPO -eq "1" -or $ssSecureGPO -eq 1) -or ($screenLockTimeout -and $screenLockTimeout -gt 0))
 
 $script:cisIG1.ScreenLockTimeout = $screenLockTimeout
 $script:cisIG1.ScreenLockEnabled = $screenLockSecure
@@ -2880,11 +2889,13 @@ if (-not $screenLockSecure) {
 }
 
 [ordered]@{
-    InactivityTimeoutSecs  = $inactivityTimeout
-    ScreenSaverTimeout     = $ssTimeout
-    ScreenSaverIsSecure    = $ssSecure
-    EffectiveTimeoutSecs   = $screenLockTimeout
-    PasswordRequired       = $screenLockSecure
+    ScreenSaveTimeOut                     = $ssTimeout
+    DelayLockInterval                     = $delayLockInterval
+    InactivityTimeoutSecs                 = $inactivityTimeout
+    ScreenSaverIsSecure_User              = $ssSecureUser
+    ScreenSaverIsSecure_GroupPolicy       = $ssSecureGPO
+    EffectiveTimeoutSecs                  = $screenLockTimeout
+    PasswordRequired                      = $screenLockSecure
 } | ConvertTo-Json | Set-Content "$OutputPath\18_cis_screen_lock.json" -Encoding UTF8
 
 # CIS 8.3 -- Adequate audit log storage (check max log sizes)
