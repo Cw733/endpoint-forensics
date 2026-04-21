@@ -1,0 +1,15 @@
+# Evidence collections -- never commit client data
+Evidence_*/
+Evidence_*.zip
+
+# Test artifacts
+test_*.txt
+transcript.txt
+
+# Local tools directory (populated by Update-Tools.ps1)
+tools/
+
+# Temp/backup files
+*.tmp
+*.bak
+*~
