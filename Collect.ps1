@@ -822,12 +822,12 @@ Invoke-Skippable -Label "logon event query (30 days Security log)" -StatusFile $
 
         # Pipe directly to Export-Csv so each event is written to disk immediately.
         # If the job is skipped/killed mid-run, everything collected so far is preserved.
-        # -MaxEvents 15000 caps worst-case runtime. Get-WinEvent returns newest-first.
+        # No hard limit -- user can press ENTER to stop at any time and keep collected events.
         Get-WinEvent -FilterHashtable @{
             LogName   = 'Security'
             Id        = $logonIds
             StartTime = $logSince
-        } -MaxEvents 15000 -ErrorAction Stop | ForEach-Object {
+        } -ErrorAction Stop | ForEach-Object {
             $count++
             if ($count % 250 -eq 0) {
                 $secs = [math]::Max(1, [int]((Get-Date) - $scanStart).TotalSeconds)
