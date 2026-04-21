@@ -1390,24 +1390,30 @@ try {
 # -- RDP configuration ----------------------------------------------------
 $rdpRegKey = "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server"
 $rdpDeny   = try { Get-ItemPropertyValue $rdpRegKey -Name fDenyTSConnections -ErrorAction Stop } catch { $null }
-$rdpOn     = ($null -ne $rdpDeny -and $rdpDeny -eq 0)
+$rdpRegValue = ($null -ne $rdpDeny -and $rdpDeny -eq 0)
 $nlsKey    = "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp"
 $nlaOn     = try { [bool](Get-ItemPropertyValue $nlsKey -Name UserAuthentication -ErrorAction Stop) } catch { $null }
 $rdpFWRules = Get-NetFirewallRule -DisplayName "*Remote Desktop*" -ErrorAction SilentlyContinue |
     Where-Object { $_.Enabled -and $_.Direction -eq "Inbound" }
 
+# Determine actual RDP state: trust port listening over registry (GPO can override registry)
+$rdpListening = [bool]($listeners | Where-Object { $_.LocalPort -eq 3389 })
+$rdpOn = if ($rdpListening) { $true } else { $rdpRegValue }
+
 $script:indicators.RDPEnabled  = $rdpOn
 $script:indicators.NLARequired = $nlaOn
 
 [ordered]@{
-    RDPEnabled         = $rdpOn
-    NLARequired        = $nlaOn
-    FirewallRulesExist = [bool]$rdpFWRules
-    FirewallRuleNames  = @($rdpFWRules.DisplayName)
+    RDPEnabled            = $rdpOn
+    RDPListeningOnPort3389 = $rdpListening
+    RegistryfDenyTSConnections = $rdpDeny
+    NLARequired           = $nlaOn
+    FirewallRulesExist    = [bool]$rdpFWRules
+    FirewallRuleNames     = @($rdpFWRules.DisplayName)
 } | ConvertTo-Json | Set-Content "$OutputPath\07_rdp_settings.json" -Encoding UTF8
 
-if ($rdpOn) { Log "  *** RDP is ENABLED via registry -- remote access is active ***" "DarkYellow" }
-else        { Log "  RDP disabled (fDenyTSConnections = 1)" }
+if ($rdpOn) { Log "  *** RDP is ENABLED -- remote access is active ***" "DarkYellow" }
+else        { Log "  RDP disabled" }
 
 # -- Windows Defender / AV status -----------------------------------------
 try {
