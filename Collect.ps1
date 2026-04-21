@@ -515,6 +515,11 @@ $script:cisIG1 = [ordered]@{
     SMBSigningRequired       = $null  # CIS 4.1 - SMB signing required
     LSAProtection            = $null  # CIS 4.1 - LSA RunAsPPL enabled
     CredentialGuard          = $null  # CIS 4.1 - Credential Guard enabled
+    LmCompatibilityLevel     = $null  # CIS 4.2 - NTLM auth level (should be >= 3, ideally 5)
+    NoLMHash                 = $null  # CIS 4.2 - LM hash storage disabled (should be 1)
+    UACEnabled               = $null  # CIS 5.1 - UAC (EnableLUA) enabled
+    UACConsentPromptAdmin    = $null  # CIS 5.1 - admin consent prompt level (>= 2)
+    WDigestCachesPlaintext   = $null  # CIS 4.1 - WDigest caches plaintext creds (should be false)
 }
 
 function Log {
@@ -763,8 +768,10 @@ else { Log "  01_gpo_rsop.txt not created (skipped or failed)" "DarkGray" }
 # Use DISM.exe as a more robust alternative that fails gracefully if not admin.
 try {
     $dismOut = DISM.exe /online /get-features /format:brief 2>&1 | Where-Object { $_ }
-    if ($dismOut -match "Error") {
-        throw "DISM requires administrator privilege"
+    # DISM prints "Error: 740" + "Elevated permissions are required" when not admin.
+    # Match specifically on that, not any substring of "Error" (feature names can contain it).
+    if ($LASTEXITCODE -ne 0 -or ($dismOut -join "`n") -match 'Error:\s*\d+|Elevated permissions are required') {
+        throw "DISM failed (exit=$LASTEXITCODE): $($dismOut | Select-Object -First 3 | Out-String)"
     }
     
     $enabledFeatures = $dismOut | Where-Object { $_ -match '\s:\sEnabled' } | 
@@ -2860,6 +2867,64 @@ if ($credGuard -ge 1) {
     Log "  [CIS 4.1] Credential Guard not configured (common on SMB workstations)" "DarkGray"
 }
 
+# CIS 4.2 -- NTLM / LM hash settings (LSA canonical locations, same path regardless of GPO)
+# LmCompatibilityLevel: 0-2 sends LM/NTLMv1 (weak), 3-5 NTLMv2 only. CIS requires >= 3, ideal = 5.
+# NoLMHash: 1 = do NOT store LM hash in SAM. Required for CIS.
+$lmCompat = $lsaKey.LmCompatibilityLevel
+$noLmHash = $lsaKey.NoLMHash
+$script:cisIG1.LmCompatibilityLevel = $lmCompat
+$script:cisIG1.NoLMHash             = $noLmHash
+# On Windows 10/11 the default when unset is 3 (NTLMv2 only) which is safe.
+# Only flag if explicitly configured to an insecure value (< 3).
+if ($null -eq $lmCompat) {
+    Log "  [CIS 4.2] LmCompatibilityLevel not explicitly set (Windows 10/11 default = 3, NTLMv2 only)" "DarkGray"
+} elseif ($lmCompat -ge 3) {
+    Log "  [CIS 4.2] LmCompatibilityLevel=$lmCompat (NTLMv2-only auth enforced)" "DarkGray"
+} else {
+    Log "  [CIS 4.2] *** FLAGGED: LmCompatibilityLevel=$lmCompat -- allows weak LM/NTLMv1 authentication ***" "DarkYellow"
+}
+# NoLMHash default on Windows Vista+ is 1 (do not store). Only flag if explicitly set to 0.
+if ($null -eq $noLmHash) {
+    Log "  [CIS 4.2] NoLMHash not explicitly set (Windows default = 1, LM hashes not stored)" "DarkGray"
+} elseif ($noLmHash -eq 1) {
+    Log "  [CIS 4.2] NoLMHash=1 (LM hashes not stored in SAM)" "DarkGray"
+} else {
+    Log "  [CIS 4.2] *** FLAGGED: NoLMHash=$noLmHash -- LM hashes may be stored (credential theft risk) ***" "DarkYellow"
+}
+
+# CIS 4.1 -- WDigest plaintext credential caching (should be disabled)
+# UseLogonCredential: 1 = caches plaintext (Mimikatz harvest target). 0/absent = safe on modern Windows.
+$wdigestKey = Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest" -ErrorAction SilentlyContinue
+$wdigestUseLogon = $wdigestKey.UseLogonCredential
+$wdigestCaches = ($wdigestUseLogon -eq 1)
+$script:cisIG1.WDigestCachesPlaintext = $wdigestCaches
+if ($wdigestCaches) {
+    Log "  [CIS 4.1] *** FLAGGED: WDigest UseLogonCredential=1 -- plaintext creds cached in memory ***" "DarkYellow"
+} else {
+    Log "  [CIS 4.1] WDigest not caching plaintext credentials" "DarkGray"
+}
+
+# CIS 5.1 -- User Account Control (UAC) enabled and admin prompt configured
+# EnableLUA must be 1. ConsentPromptBehaviorAdmin >= 2 (prompt), 0 = silent elevation (unsafe).
+$uacKey = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -ErrorAction SilentlyContinue
+$enableLUA = $uacKey.EnableLUA
+$consentPromptAdmin = $uacKey.ConsentPromptBehaviorAdmin
+$uacEnabled = ($enableLUA -eq 1)
+$script:cisIG1.UACEnabled            = $uacEnabled
+$script:cisIG1.UACConsentPromptAdmin = $consentPromptAdmin
+if ($uacEnabled) {
+    Log "  [CIS 5.1] UAC enabled (EnableLUA=1)" "DarkGray"
+} else {
+    Log "  [CIS 5.1] *** FLAGGED: UAC disabled (EnableLUA=$enableLUA) -- all processes run elevated ***" "DarkYellow"
+}
+if ($consentPromptAdmin -ge 2) {
+    Log "  [CIS 5.1] UAC admin consent prompt level=$consentPromptAdmin (prompts required)" "DarkGray"
+} elseif ($null -ne $consentPromptAdmin) {
+    Log "  [CIS 5.1] *** FLAGGED: ConsentPromptBehaviorAdmin=$consentPromptAdmin -- silent elevation allowed ***" "DarkYellow"
+} else {
+    Log "  [CIS 5.1] ConsentPromptBehaviorAdmin not set (default=5 on modern Windows)" "DarkGray"
+}
+
 # Local security policy export (secedit) -- password complexity, lockout, audit categories
 try {
     $seceditTmp = "$env:TEMP\ce_secpol_$(Get-Random).cfg"
@@ -2874,14 +2939,20 @@ try {
 }
 
 $secConfigReport = [ordered]@{
-    SMBv1Enabled       = $smb1Enabled
-    LLMNRDisabled      = $script:cisIG1.LLMNRDisabled
-    NetBIOSDisabled    = $nbDisabled
-    SMBSigningRequired = $smbSigningRequired
-    LSAProtection      = $lsaProtected
-    LSA_RunAsPPL       = $lsaPPL
-    LSA_RunAsPPLBoot   = $lsaPPLBoot
-    CredentialGuard    = ($credGuard -ge 1)
+    SMBv1Enabled            = $smb1Enabled
+    LLMNRDisabled           = $script:cisIG1.LLMNRDisabled
+    NetBIOSDisabled         = $nbDisabled
+    SMBSigningRequired      = $smbSigningRequired
+    LSAProtection           = $lsaProtected
+    LSA_RunAsPPL            = $lsaPPL
+    LSA_RunAsPPLBoot        = $lsaPPLBoot
+    CredentialGuard         = ($credGuard -ge 1)
+    LmCompatibilityLevel    = $lmCompat
+    NoLMHash                = $noLmHash
+    WDigest_UseLogonCredential = $wdigestUseLogon
+    WDigestCachesPlaintext  = $wdigestCaches
+    UAC_EnableLUA           = $enableLUA
+    UAC_ConsentPromptAdmin  = $consentPromptAdmin
 }
 $secConfigReport | ConvertTo-Json | Set-Content "$OutputPath\18_cis_secure_config.json" -Encoding UTF8
 
@@ -2889,21 +2960,28 @@ $secConfigReport | ConvertTo-Json | Set-Content "$OutputPath\18_cis_secure_confi
 $screenLockTimeout = $null
 $screenLockSecure  = $null
 
-# Check multiple registry locations for screen timeout (in order of precedence):
+# Check ALL registry locations for screen timeout (in order of precedence). GPO-applied
+# policy writes to HKCU\SOFTWARE\Policies\... on domain machines and is NOT mirrored to
+# the regular HKCU\Control Panel\Desktop key, so we must read both.
 # 1. Per-user screensaver timeout (HKCU\Control Panel\Desktop\ScreenSaveTimeOut)
-# 2. Group Policy applied inactivity timeout (HKLM\...\Policies\System\InactivityTimeoutSecs)
-# 3. Group Policy applied lock delay (HKCU\Control Panel\Desktop\DelayLockInterval)
-$ssTimeout = (Get-ItemProperty "HKCU:\Control Panel\Desktop" -ErrorAction SilentlyContinue).ScreenSaveTimeOut
+# 2. Per-user GPO screensaver timeout (HKCU\SOFTWARE\Policies\...\ScreenSaveTimeOut) <-- GPO
+# 3. Machine GPO screensaver timeout (HKLM\SOFTWARE\Policies\...\ScreenSaveTimeOut)
+# 4. Group Policy applied inactivity timeout (HKLM\...\Policies\System\InactivityTimeoutSecs)
+# 5. Per-user lock delay (HKCU\Control Panel\Desktop\DelayLockInterval)
+$ssTimeout        = (Get-ItemProperty "HKCU:\Control Panel\Desktop" -ErrorAction SilentlyContinue).ScreenSaveTimeOut
+$ssTimeoutUserGPO = (Get-ItemProperty "HKCU:\SOFTWARE\Policies\Microsoft\Windows\Control Panel\Desktop" -ErrorAction SilentlyContinue).ScreenSaveTimeOut
+$ssTimeoutMachGPO = (Get-ItemProperty "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Control Panel\Desktop" -ErrorAction SilentlyContinue).ScreenSaveTimeOut
 $inactivityKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"
 $inactivityTimeout = (Get-ItemProperty $inactivityKey -ErrorAction SilentlyContinue).InactivityTimeoutSecs
 $delayLockInterval = (Get-ItemProperty "HKCU:\Control Panel\Desktop" -ErrorAction SilentlyContinue).DelayLockInterval
 
 # Use whichever is more restrictive (smaller timeout = more restrictive)
-# Collect all non-null values and use the minimum
+# Collect all non-null values and use the minimum. Cast to int because registry values
+# from HKCU\...\Policies\... are often stored as REG_SZ strings.
 $timeoutValues = @()
-if ($ssTimeout) { $timeoutValues += $ssTimeout }
-if ($inactivityTimeout) { $timeoutValues += $inactivityTimeout }
-if ($delayLockInterval) { $timeoutValues += $delayLockInterval }
+foreach ($v in @($ssTimeout, $ssTimeoutUserGPO, $ssTimeoutMachGPO, $inactivityTimeout, $delayLockInterval)) {
+    if ($null -ne $v -and "$v" -match '^\d+$' -and [int]$v -gt 0) { $timeoutValues += [int]$v }
+}
 
 if ($timeoutValues.Count -gt 1) {
     $screenLockTimeout = ($timeoutValues | Measure-Object -Minimum).Minimum
@@ -2911,11 +2989,16 @@ if ($timeoutValues.Count -gt 1) {
     $screenLockTimeout = $timeoutValues[0]
 }
 
-# Check screensaver password requirement in both per-user and group policy locations
-$ssSecureUser = (Get-ItemProperty "HKCU:\Control Panel\Desktop" -ErrorAction SilentlyContinue).ScreenSaverIsSecure
-$ssSecureGPO = (Get-ItemProperty "HKCU:\Software\Policies\Microsoft\Windows\Control Panel\Desktop" -ErrorAction SilentlyContinue).ScreenSaverIsSecure
-# Either user setting or GPO setting = 1 means secure
-$screenLockSecure = (($ssSecureUser -eq "1" -or $ssSecureUser -eq 1) -or ($ssSecureGPO -eq "1" -or $ssSecureGPO -eq 1) -or ($screenLockTimeout -and $screenLockTimeout -gt 0))
+# Check screensaver password requirement in all three locations: per-user, user-GPO, machine-GPO
+$ssSecureUser    = (Get-ItemProperty "HKCU:\Control Panel\Desktop" -ErrorAction SilentlyContinue).ScreenSaverIsSecure
+$ssSecureUserGPO = (Get-ItemProperty "HKCU:\SOFTWARE\Policies\Microsoft\Windows\Control Panel\Desktop" -ErrorAction SilentlyContinue).ScreenSaverIsSecure
+$ssSecureMachGPO = (Get-ItemProperty "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Control Panel\Desktop" -ErrorAction SilentlyContinue).ScreenSaverIsSecure
+$screenLockSecure = (
+    ("$ssSecureUser"    -eq "1") -or
+    ("$ssSecureUserGPO" -eq "1") -or
+    ("$ssSecureMachGPO" -eq "1") -or
+    ($screenLockTimeout -and $screenLockTimeout -gt 0)
+)
 
 $script:cisIG1.ScreenLockTimeout = $screenLockTimeout
 $script:cisIG1.ScreenLockEnabled = $screenLockSecure
@@ -2932,13 +3015,16 @@ if (-not $screenLockSecure) {
 }
 
 [ordered]@{
-    ScreenSaveTimeOut                     = $ssTimeout
-    DelayLockInterval                     = $delayLockInterval
-    InactivityTimeoutSecs                 = $inactivityTimeout
-    ScreenSaverIsSecure_User              = $ssSecureUser
-    ScreenSaverIsSecure_GroupPolicy       = $ssSecureGPO
-    EffectiveTimeoutSecs                  = $screenLockTimeout
-    PasswordRequired                      = $screenLockSecure
+    ScreenSaveTimeOut_User               = $ssTimeout
+    ScreenSaveTimeOut_UserGPO            = $ssTimeoutUserGPO
+    ScreenSaveTimeOut_MachineGPO         = $ssTimeoutMachGPO
+    DelayLockInterval                    = $delayLockInterval
+    InactivityTimeoutSecs                = $inactivityTimeout
+    ScreenSaverIsSecure_User             = $ssSecureUser
+    ScreenSaverIsSecure_UserGPO          = $ssSecureUserGPO
+    ScreenSaverIsSecure_MachineGPO       = $ssSecureMachGPO
+    EffectiveTimeoutSecs                 = $screenLockTimeout
+    PasswordRequired                     = $screenLockSecure
 } | ConvertTo-Json | Set-Content "$OutputPath\18_cis_screen_lock.json" -Encoding UTF8
 
 # CIS 8.3 -- Adequate audit log storage (check max log sizes)
