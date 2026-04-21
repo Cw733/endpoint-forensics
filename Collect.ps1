@@ -591,12 +591,15 @@ function Invoke-Skippable {
         if ([Console]::KeyAvailable) {
             $key = [Console]::ReadKey($true)
             if ($key.Key -eq 'Enter') {
-                Stop-Job $job
+                Stop-Job $job -ErrorAction SilentlyContinue
+                Start-Sleep -Milliseconds 50  # Allow job to actually stop
                 Write-Progress -Activity $Label -Completed
                 $elapsed = [int]((Get-Date) - $jobStart).TotalSeconds
                 Write-Host "    [SKIPPED '$Label' after ${elapsed}s]" -ForegroundColor DarkYellow
                 Add-Content -Path $logFile -Value "    '$Label' skipped by user"
-                Remove-Job $job -Force
+                Remove-Job $job -Force -ErrorAction SilentlyContinue
+                # Drain any remaining keyboard buffer to prevent key bleed-through
+                while ([Console]::KeyAvailable) { [Console]::ReadKey($true) | Out-Null }
                 if ($StatusFile -and (Test-Path $StatusFile)) { Remove-Item $StatusFile -Force -ErrorAction SilentlyContinue }
                 return "skipped"
             }
