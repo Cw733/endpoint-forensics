@@ -206,7 +206,7 @@ OUTPUT FILES (key files -- full list in _collection_log.txt)
   18_cis_screen_lock.json       Screen lock / inactivity timeout (CIS 4.3)
   18_cis_audit_log_sizes.json   Event log size and retention (CIS 8.3)
   18_cis_ps_logging.json        PowerShell logging policy (CIS 8.5)
-  20_AmCache.hve                Execution evidence (every EXE run; survives Prefetch wipe)
+  20_AmCache_README.txt           AmCache.hve is OS-locked on live systems; notes on offline extraction methods
   20_ShimCache.reg              AppCompatCache (execution history, registry-based)
   20_SRUDB.dat + 20_SOFTWARE    SRUM: per-app network bytes sent/received (30-60 days)
   20_Shellbags.reg              Every folder navigated (incl. detached USB paths)
@@ -2822,21 +2822,24 @@ $secConfigReport | ConvertTo-Json | Set-Content "$OutputPath\18_cis_secure_confi
 $screenLockTimeout = $null
 $screenLockSecure  = $null
 
-# Check Group Policy inactivity timeout first (takes precedence)
-$inactivityKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"
-$inactivityTimeout = (Get-ItemProperty $inactivityKey -ErrorAction SilentlyContinue).InactivityTimeoutSecs
-if ($inactivityTimeout) {
-    $screenLockTimeout = $inactivityTimeout
-}
-
-# Check per-user screensaver settings
+# Check per-user screensaver settings first (highest precedence is group policy applied via gpsync)
 $ssTimeout = (Get-ItemProperty "HKCU:\Control Panel\Desktop" -ErrorAction SilentlyContinue).ScreenSaveTimeOut
 $ssSecure  = (Get-ItemProperty "HKCU:\Control Panel\Desktop" -ErrorAction SilentlyContinue).ScreenSaverIsSecure
 
-if (-not $screenLockTimeout -and $ssTimeout) {
+# Also check the group policy applied value (effectiveInactivityTimeout reflects actual applied policy)
+$inactivityKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"
+$inactivityTimeout = (Get-ItemProperty $inactivityKey -ErrorAction SilentlyContinue).InactivityTimeoutSecs
+
+# Use whichever is more restrictive (smaller timeout = more restrictive)
+if ($inactivityTimeout -and $ssTimeout) {
+    $screenLockTimeout = [math]::Min([int]$inactivityTimeout, [int]$ssTimeout)
+} elseif ($inactivityTimeout) {
+    $screenLockTimeout = [int]$inactivityTimeout
+} elseif ($ssTimeout) {
     $screenLockTimeout = [int]$ssTimeout
 }
-$screenLockSecure = ($ssSecure -eq "1") -or ($inactivityTimeout -and $inactivityTimeout -gt 0)
+
+$screenLockSecure = ($ssSecure -eq "1") -or ($screenLockTimeout -and $screenLockTimeout -gt 0)
 
 $script:cisIG1.ScreenLockTimeout = $screenLockTimeout
 $script:cisIG1.ScreenLockEnabled = $screenLockSecure
@@ -2936,22 +2939,39 @@ End-Section   # close CIS secure configuration section
 Start-Section "EXECUTION & ACTIVITY ARTIFACTS" "AmCache, ShimCache, SRUM, Shellbags, UserAssist, ActivitiesCache, LNK, browser ext, VSS, recycle bin, RDP history, drivers, BAM, Office trust, DoH, ETW, sessions"
 
 # -- AmCache.hve (proves every EXE that ran, even without Prefetch) --------
-try {
-    $amcacheSrc = "C:\Windows\AppCompat\Programs\Amcache.hve"
-    if (Test-Path $amcacheSrc) {
-        $amcacheOut = "$OutputPath\20_AmCache.hve"
-        & reg.exe save 'HKLM\AmCacheTemp' $amcacheOut /y 2>$null | Out-Null
-        if (-not (Test-Path $amcacheOut)) {
-            # Fallback: direct copy (may fail if locked)
-            Copy-Item $amcacheSrc $amcacheOut -Force -ErrorAction SilentlyContinue
-        }
-        if (Test-Path $amcacheOut) {
-            Log "  Saved: 20_AmCache.hve (parse with AmcacheParser or RegRipper)"
-        } else {
-            Log "  AmCache.hve could not be copied (locked)" "DarkGray"
-        }
-    }
-} catch { Log "  AmCache copy error: $_" "DarkGray" }
+# NOTE: AmCache.hve is locked by the OS on live systems. Offline/VSS extraction required.
+# Not collecting on live systems to avoid timeout/lock issues. Document this for reference.
+$amcacheSrc = "C:\Windows\AppCompat\Programs\Amcache.hve"
+if (Test-Path $amcacheSrc) {
+    $amcacheNote = @"
+AmCache.hve is present but LOCKED by the OS on live systems.
+
+To extract AmCache for analysis:
+1. OFFLINE EXTRACTION: Pull the drive, mount on analysis machine, copy from \Windows\AppCompat\Programs\
+2. VSS SNAPSHOT: Use 'vssadmin create shadow' to create a shadow copy, then copy from snapshot
+3. LIVE REGISTRY PARSE: Query HKLM\SYSTEM\...AmCacheParsed (may be partial; see 20_UserAssist, 20_BAM, 20_ShimCache for execution history)
+
+AmCache typically shows:
+- Every executable that ran on the system
+- Execution timestamps
+- File metadata (path, size, hash)
+- Can survive intentional Prefetch deletion
+
+Tools for parsing:
+- AmcacheParser (by Eric Zimmerman)
+- Registry Ripper with amcache.pl plugin
+- SwiftForensics
+- RECmd
+
+Alternatives in this collection:
+- 20_ShimCache.reg - app compatibility cache (similar purpose)
+- 20_UserAssist.reg - GUI program launch records (less complete than AmCache)
+- 20_Prefetch (section 13) - individual run times per executable
+- 20_BAM.reg - Background Activity Monitor (one execution timestamp per app)
+"@
+    $amcacheNote | Set-Content "$OutputPath\20_AmCache_README.txt" -Encoding UTF8
+    Log "  AmCache.hve locked (OS-in-use); saved collection notes to 20_AmCache_README.txt" "DarkGray"
+}
 
 # -- ShimCache (AppCompatCache registry value) ------------------------------
 try {
